@@ -46,6 +46,7 @@ python3 main.py generate-data
 python3 main.py preprocess
 python3 main.py train
 python3 main.py detect
+python3 main.py detect-csv
 ```
 
 ## 4. Run Each Module Separately
@@ -136,10 +137,17 @@ Using main entry point:
 python3 main.py detect
 ```
 
+Explicit CSV replay mode:
+
+```bash
+python3 main.py detect-csv
+```
+
 Using module directly:
 
 ```bash
 python3 -m snmp_anomaly_detection.inference.detect_anomalies
+python3 -m snmp_anomaly_detection.inference.csv_replay
 ```
 
 Outputs:

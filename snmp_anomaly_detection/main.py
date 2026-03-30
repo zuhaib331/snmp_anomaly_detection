@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from snmp_anomaly_detection.data.dataset_builder import main as build_dataset_main
+from snmp_anomaly_detection.inference.csv_replay import main as detect_csv_main
 from snmp_anomaly_detection.inference.detect_anomalies import main as detect_main
 from snmp_anomaly_detection.preprocessing.feature_engineering import (
     main as feature_engineering_main,
@@ -14,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="SNMP anomaly detection pipeline")
     parser.add_argument(
         "step",
-        choices=["generate-data", "preprocess", "train", "detect"],
+        choices=["generate-data", "preprocess", "train", "detect", "detect-csv"],
         help="Pipeline step to execute.",
     )
     return parser
@@ -31,6 +32,8 @@ def main() -> None:
         train_main()
     elif args.step == "detect":
         detect_main()
+    elif args.step == "detect-csv":
+        detect_csv_main()
 
 
 if __name__ == "__main__":
