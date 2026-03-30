@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-import joblib
 import numpy as np
 import pandas as pd
 
@@ -11,20 +10,13 @@ from snmp_anomaly_detection.config import (
     InferenceConfig,
     ProjectPaths,
 )
-from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
+from snmp_anomaly_detection.inference.core import (
+    load_inference_artifacts,
+    scale_feature_frame,
+    score_windows,
+)
+from snmp_anomaly_detection.inference.window_manager import DeviceWindowManager
 from snmp_anomaly_detection.preprocessing.feature_engineering import load_dataset
-
-
-def _require_torch() -> None:
-    if torch is None:
-        raise ImportError(
-            "PyTorch is required for detection. Install torch, then run `python3 main.py detect`."
-        )
-
-
-def load_model_metadata(paths: ProjectPaths) -> dict:
-    with open(paths.model_metadata_file, "r", encoding="utf-8") as file:
-        return json.load(file)
 
 
 def build_detection_sequences(
@@ -33,50 +25,28 @@ def build_detection_sequences(
 ) -> tuple[np.ndarray, list[dict[str, object]]]:
     sequences = []
     metadata = []
-    feature_columns = list(config.feature_columns)
+    manager = DeviceWindowManager(config)
 
-    for device_id in dataframe["device_id"].unique():
-        device_frame = dataframe[dataframe["device_id"] == device_id].reset_index(drop=True)
-        values = device_frame[feature_columns].values
+    for _, row in dataframe.iterrows():
+        ready_window = manager.add_event(row.to_dict())
+        if ready_window is None:
+            continue
 
-        for index in range(len(values) - config.sequence_length):
-            window = values[index : index + config.sequence_length]
-            sequences.append(window)
-            end_row = device_frame.iloc[index + config.sequence_length - 1]
-            metadata.append(
-                {
-                    "device_id": device_id,
-                    "device_window_index": index,
-                    "window_start": str(device_frame.iloc[index]["timestamp"]),
-                    "window_end": str(end_row["timestamp"]),
-                    "source_anomaly_label": int(end_row["anomaly"]),
-                }
-            )
+        sequences.append(ready_window.values)
+        metadata.append(
+            {
+                "device_id": ready_window.device_id,
+                "device_window_index": ready_window.device_window_index,
+                "window_start": ready_window.window_start,
+                "window_end": ready_window.window_end,
+                "source_anomaly_label": ready_window.source_anomaly_label,
+            }
+        )
 
     if not sequences:
-        return np.empty((0, config.sequence_length, len(feature_columns))), metadata
+        return np.empty((0, config.sequence_length, len(config.feature_columns))), metadata
 
     return np.array(sequences), metadata
-
-
-def run_model(model, sequences: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if len(sequences) == 0:
-        return np.array([]), np.array([]), np.array([])
-
-    inputs = torch.tensor(sequences, dtype=torch.float32)
-    model.eval()
-    with torch.no_grad():
-        reconstructed = model(inputs)
-        squared_error = (reconstructed - inputs) ** 2
-        sequence_errors = torch.mean(squared_error, dim=(1, 2))
-        feature_errors = torch.mean(squared_error, dim=1)
-        timestep_errors = torch.mean(squared_error, dim=2)
-
-    return (
-        sequence_errors.cpu().numpy(),
-        feature_errors.cpu().numpy(),
-        timestep_errors.cpu().numpy(),
-    )
 
 
 def _build_window_export(
@@ -130,72 +100,46 @@ def detect_anomalies(
     config: FeatureEngineeringConfig | None = None,
     inference_config: InferenceConfig | None = None,
 ) -> pd.DataFrame:
-    _require_torch()
     paths = paths or ProjectPaths()
     config = config or FeatureEngineeringConfig()
     inference_config = inference_config or InferenceConfig()
 
     dataframe = load_dataset(paths=paths)
-    scaler = joblib.load(paths.scaler_file)
-    metadata = load_model_metadata(paths)
+    artifacts = load_inference_artifacts(paths=paths, config=config)
 
-    feature_columns = list(config.feature_columns)
-    scaled = dataframe.copy()
-    scaled[feature_columns] = scaler.transform(scaled[feature_columns])
+    scaled = scale_feature_frame(dataframe, artifacts.scaler, config)
 
     sequences, sequence_metadata = build_detection_sequences(scaled, config)
-    model = LSTMAutoencoder(
-        input_size=metadata["input_size"],
-        hidden_size=metadata["hidden_size"],
-        latent_size=metadata["latent_size"],
-    )
-    state_dict = torch.load(paths.model_file, map_location="cpu")
-    model.load_state_dict(state_dict)
-
-    reconstruction_errors, feature_errors, timestep_errors = run_model(model, sequences)
-    threshold = float(metadata["threshold"])
+    scores = score_windows(sequences, artifacts, config)
 
     results = pd.DataFrame(sequence_metadata)
     results["sequence_length"] = config.sequence_length
-    results["reconstruction_error"] = reconstruction_errors
-    results["threshold"] = threshold
-    results["error_margin"] = results["reconstruction_error"] - results["threshold"]
-    results["predicted_anomaly"] = (
-        results["reconstruction_error"] > results["threshold"]
-    ).astype(int)
 
-    if len(results) > 0:
-        top_feature_indices = feature_errors.argmax(axis=1)
-        top_timestep_indices = timestep_errors.argmax(axis=1)
-
-        results["top_error_feature"] = [
-            feature_columns[index] for index in top_feature_indices
+    if scores:
+        results["reconstruction_error"] = [score.reconstruction_error for score in scores]
+        results["threshold"] = [score.threshold for score in scores]
+        results["error_margin"] = [score.error_margin for score in scores]
+        results["predicted_anomaly"] = [score.predicted_anomaly for score in scores]
+        results["top_error_feature"] = [score.top_error_feature for score in scores]
+        results["top_error_timestep_offset"] = [
+            score.top_error_timestep_offset for score in scores
         ]
-        results["top_error_timestep_offset"] = top_timestep_indices.astype(int)
+        results["detection_basis"] = [score.detection_basis for score in scores]
 
-        for feature_index, feature_name in enumerate(feature_columns):
-            results[f"feature_error_{feature_name}"] = feature_errors[:, feature_index]
-
-        results["detection_basis"] = results.apply(
-            lambda row: (
-                f"error {row['reconstruction_error']:.6f} exceeded threshold "
-                f"{row['threshold']:.6f} by {row['error_margin']:.6f}; "
-                f"highest contribution from {row['top_error_feature']} at "
-                f"window step {int(row['top_error_timestep_offset'])}"
-            )
-            if row["predicted_anomaly"] == 1
-            else (
-                f"error {row['reconstruction_error']:.6f} stayed below threshold "
-                f"{row['threshold']:.6f}; highest contribution from "
-                f"{row['top_error_feature']} at window step "
-                f"{int(row['top_error_timestep_offset'])}"
-            ),
-            axis=1,
-        )
+        for feature_name in config.feature_columns:
+            results[f"feature_error_{feature_name}"] = [
+                score.feature_errors[feature_name] for score in scores
+            ]
     else:
+        results["reconstruction_error"] = pd.Series(dtype=float)
+        results["threshold"] = pd.Series(dtype=float)
+        results["error_margin"] = pd.Series(dtype=float)
+        results["predicted_anomaly"] = pd.Series(dtype=int)
         results["top_error_feature"] = pd.Series(dtype=str)
         results["top_error_timestep_offset"] = pd.Series(dtype=int)
         results["detection_basis"] = pd.Series(dtype=str)
+        for feature_name in config.feature_columns:
+            results[f"feature_error_{feature_name}"] = pd.Series(dtype=float)
 
     anomaly_windows = _build_window_export(dataframe, results, config)
 
