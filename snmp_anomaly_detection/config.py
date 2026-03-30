@@ -34,6 +34,12 @@ class ProjectPaths:
     anomaly_windows_file: Path = field(
         default_factory=lambda: PACKAGE_ROOT / "outputs" / "anomaly_windows.json"
     )
+    kafka_live_results_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "kafka_live_results.jsonl"
+    )
+    kafka_live_anomaly_windows_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "kafka_live_anomaly_windows.jsonl"
+    )
 
     def ensure_directories(self) -> None:
         for directory in (self.data_dir, self.outputs_dir, self.utils_dir):
@@ -68,3 +74,13 @@ class TrainingConfig:
 @dataclass(frozen=True)
 class InferenceConfig:
     save_results: bool = True
+
+
+@dataclass(frozen=True)
+class KafkaConfig:
+    bootstrap_servers: tuple[str, ...] = ("localhost:9092",)
+    consumer_group_id: str = "snmp-anomaly-detection"
+    poll_timeout_ms: int = 1000
+    micro_batch_size: int = 8
+    micro_batch_max_wait_ms: int = 50
+    save_local_results: bool = True

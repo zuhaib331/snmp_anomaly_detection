@@ -47,6 +47,9 @@ python3 main.py preprocess
 python3 main.py train
 python3 main.py detect
 python3 main.py detect-csv
+python3 main.py detect-kafka-dry
+python3 main.py detect-kafka
+python3 main.py produce-kafka-test-data
 ```
 
 ## 4. Run Each Module Separately
@@ -153,6 +156,89 @@ python3 -m snmp_anomaly_detection.inference.csv_replay
 Outputs:
 - `snmp_anomaly_detection/outputs/anomaly_results.csv`
 - `snmp_anomaly_detection/outputs/anomaly_windows.json`
+
+### E. Run Kafka dry ingestion
+
+This step:
+- connects to Kafka
+- consumes messages from the hardcoded topic
+- decodes JSON payloads
+- normalizes them into the shared event shape
+- does not run anomaly scoring yet
+
+Using main entry point:
+
+```bash
+python3 main.py detect-kafka-dry
+```
+
+Using module directly:
+
+```bash
+python3 -m snmp_anomaly_detection.streaming.detect_kafka_dry
+```
+
+Notes:
+- current v1 topic is hardcoded in code
+- `kafka-python` must be installed
+- stop the dry consumer with `Ctrl+C`
+
+### F. Publish Kafka test data
+
+This step:
+- generates fresh synthetic SNMP events in memory
+- creates continuous per-device telemetry for a shared topic
+- injects anomalies probabilistically for testing
+- publishes messages in the same JSON schema expected by the Kafka consumer
+
+Using main entry point:
+
+```bash
+python3 main.py produce-kafka-test-data
+python3 main.py produce-kafka-test-data --device-count 20 --sleep-seconds 0.05
+python3 main.py produce-kafka-test-data --max-messages 200 --anomaly-probability 0.10
+```
+
+Using module directly:
+
+```bash
+python3 -m snmp_anomaly_detection.streaming.produce_kafka_test_data
+```
+
+Notes:
+- the producer sends to the same hardcoded topic used by `detect-kafka-dry`
+- messages include: `timestamp`, `device_id`, `cpu`, `memory`, `in_octets`, `out_octets`, `errors`, `anomaly`
+- default behavior is continuous streaming until `Ctrl+C`
+- detailed test-generator guide: `docs/streaming/KAFKA_TEST_DATA_GENERATOR.md`
+
+### G. Run Kafka live detection
+
+This step:
+- connects to Kafka
+- validates incoming messages
+- normalizes valid payloads into shared events
+- builds per-device rolling windows
+- applies live micro-batching
+- prints live anomaly results locally
+
+Using main entry point:
+
+```bash
+python3 main.py detect-kafka
+```
+
+Using module directly:
+
+```bash
+python3 -m snmp_anomaly_detection.streaming.detect_kafka
+```
+
+Notes:
+- current v1 topic is hardcoded in code
+- live results are printed to the terminal
+- live results are also written locally to `snmp_anomaly_detection/outputs/kafka_live_results.jsonl`
+- anomalous live windows are also written locally to `snmp_anomaly_detection/outputs/kafka_live_anomaly_windows.jsonl`
+- stop the live consumer with `Ctrl+C`
 
 ## 5. Run the Full Pipeline End to End
 

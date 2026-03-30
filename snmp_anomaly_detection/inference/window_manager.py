@@ -17,6 +17,7 @@ class ReadyWindow:
     window_end: str
     source_anomaly_label: int
     values: np.ndarray
+    records: list[dict[str, Any]]
 
 
 class DeviceWindowManager:
@@ -56,4 +57,5 @@ class DeviceWindowManager:
             window_end=str(window_records[-1]["timestamp"]),
             source_anomaly_label=int(window_records[-1].get("anomaly", 0)),
             values=values,
+            records=window_records,
         )

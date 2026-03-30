@@ -64,6 +64,8 @@ Goal: consume production events from one shared Kafka topic.
 - Reuse the already prepared live micro-batching layer for low-latency scoring.
 - Add Kafka consumer configuration.
 - Consume one topic only.
+- For v1, use a hardcoded topic in the Kafka integration path.
+- Defer dynamic topic consumption and runtime topic switching to a later phase.
 - Extract `device_id` from each message and segregate in application code.
 - Pass events into the same window manager and scorer used by CSV replay.
 
@@ -74,6 +76,8 @@ Acceptance:
 - One mixed-device topic can be consumed continuously.
 - Device-specific windows are created correctly.
 - Anomalies are produced as live results.
+- Initial implementation works with one hardcoded topic.
+- Dynamic topic consumption is explicitly out of scope for v1.
 
 ## Phase 5: Output and Result Handling
 Goal: make both modes produce consistent results.
@@ -203,3 +207,15 @@ Current default micro-batch policy:
 - `max_wait_ms = 50`
 
 This is prepared for Phase 4, but it is not yet wired to Kafka.
+
+## Phase 4 Scope Decision
+
+Kafka Phase 4 will be implemented in two steps:
+
+- v1:
+  - one hardcoded input topic
+  - live ingestion and anomaly scoring
+  - no dynamic topic switching
+- later enhancement:
+  - configurable or dynamic topic consumption
+  - topic update handling without redesigning the scoring pipeline
