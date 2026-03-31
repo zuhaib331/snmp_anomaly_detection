@@ -40,7 +40,12 @@ def require_torch_for_inference() -> None:
 
 
 def load_model_metadata(paths: ProjectPaths) -> dict[str, Any]:
-    with open(paths.model_metadata_file, "r", encoding="utf-8") as file:
+    metadata_path = (
+        paths.model_metadata_file
+        if paths.model_metadata_file.exists()
+        else paths.legacy_model_metadata_file
+    )
+    with open(metadata_path, "r", encoding="utf-8") as file:
         return json.load(file)
 
 
@@ -58,12 +63,14 @@ def load_inference_artifacts(
         hidden_size=metadata["hidden_size"],
         latent_size=metadata["latent_size"],
     )
-    state_dict = torch.load(paths.model_file, map_location="cpu")
+    model_path = paths.model_file if paths.model_file.exists() else paths.legacy_model_file
+    scaler_path = paths.scaler_file if paths.scaler_file.exists() else paths.legacy_scaler_file
+    state_dict = torch.load(model_path, map_location="cpu")
     model.load_state_dict(state_dict)
     model.eval()
 
     return InferenceArtifacts(
-        scaler=joblib.load(paths.scaler_file),
+        scaler=joblib.load(scaler_path),
         model=model,
         metadata=metadata,
         threshold=float(metadata["threshold"]),

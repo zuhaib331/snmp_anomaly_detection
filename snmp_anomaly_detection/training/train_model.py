@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import json
+from dataclasses import asdict
+from datetime import datetime
 
 import numpy as np
 
-from snmp_anomaly_detection.config import ProjectPaths, TrainingConfig
+from snmp_anomaly_detection.config import FeatureEngineeringConfig, ProjectPaths, TrainingConfig
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
 
 
@@ -16,8 +19,10 @@ def _require_torch() -> None:
 
 
 def load_training_arrays(paths: ProjectPaths) -> tuple[np.ndarray, np.ndarray]:
-    x_train = np.load(paths.x_train_file)
-    y_train = np.load(paths.y_train_file)
+    x_train_path = paths.x_train_file if paths.x_train_file.exists() else paths.legacy_x_train_file
+    y_train_path = paths.y_train_file if paths.y_train_file.exists() else paths.legacy_y_train_file
+    x_train = np.load(x_train_path)
+    y_train = np.load(y_train_path)
     return x_train, y_train
 
 
@@ -48,12 +53,15 @@ def save_training_artifacts(
     model,
     paths: ProjectPaths,
     config: TrainingConfig,
+    feature_config: FeatureEngineeringConfig,
     input_size: int,
     threshold: float,
     train_loss_history: list[float],
 ) -> None:
     torch.save(model.state_dict(), paths.model_file)
     metadata = {
+        "artifact_dir": str(paths.artifact_dir),
+        "created_at_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "input_size": input_size,
         "hidden_size": config.hidden_size,
         "latent_size": config.latent_size,
@@ -61,6 +69,8 @@ def save_training_artifacts(
         "epochs": config.epochs,
         "learning_rate": config.learning_rate,
         "threshold": threshold,
+        "feature_config": asdict(feature_config),
+        "training_config": asdict(config),
         "train_loss_history": train_loss_history,
     }
     with open(paths.model_metadata_file, "w", encoding="utf-8") as file:
@@ -70,10 +80,12 @@ def save_training_artifacts(
 def train_model(
     paths: ProjectPaths | None = None,
     config: TrainingConfig | None = None,
+    feature_config: FeatureEngineeringConfig | None = None,
 ) -> dict[str, float]:
     _require_torch()
     paths = paths or ProjectPaths()
     config = config or TrainingConfig()
+    feature_config = feature_config or FeatureEngineeringConfig()
     paths.ensure_directories()
 
     x_train, y_train = load_training_arrays(paths)
@@ -120,6 +132,7 @@ def train_model(
         model=model,
         paths=paths,
         config=config,
+        feature_config=feature_config,
         input_size=input_size,
         threshold=threshold,
         train_loss_history=train_loss_history,
@@ -132,12 +145,29 @@ def train_model(
     }
     print(f"Model saved to: {paths.model_file}")
     print(f"Metadata saved to: {paths.model_metadata_file}")
+    print(f"Artifact directory: {paths.artifact_dir}")
     print(f"Anomaly threshold: {threshold:.6f}")
     return summary
 
 
 def main() -> None:
-    train_model()
+    parser = argparse.ArgumentParser(description="Train the SNMP anomaly model.")
+    parser.add_argument(
+        "--artifact-dir-name",
+        help="Named artifact directory under snmp_anomaly_detection/artifacts/.",
+    )
+    parser.add_argument(
+        "--artifact-dir",
+        help="Explicit artifact directory path to use for training artifacts.",
+    )
+    args = parser.parse_args()
+
+    default_paths = ProjectPaths()
+    paths = ProjectPaths(
+        artifact_dir_name=args.artifact_dir_name or default_paths.artifact_dir_name,
+        artifact_dir_override=args.artifact_dir,
+    )
+    train_model(paths=paths)
 
 
 if __name__ == "__main__":

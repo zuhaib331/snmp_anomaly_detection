@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+
 import pandas as pd
 
 from snmp_anomaly_detection.config import (
@@ -25,7 +27,27 @@ def detect_anomalies(
 
 
 def main() -> None:
-    detect_anomalies()
+    parser = argparse.ArgumentParser(description="Run SNMP anomaly detection on CSV input.")
+    parser.add_argument(
+        "--input-file",
+        help="Optional CSV file to score. Defaults to the configured dataset file.",
+    )
+    parser.add_argument(
+        "--artifact-dir-name",
+        help="Named artifact directory under snmp_anomaly_detection/artifacts/ to load.",
+    )
+    parser.add_argument(
+        "--artifact-dir",
+        help="Explicit artifact directory path to load model, scaler, and metadata from.",
+    )
+    args = parser.parse_args()
+
+    default_paths = ProjectPaths()
+    paths = ProjectPaths(
+        artifact_dir_name=args.artifact_dir_name or default_paths.artifact_dir_name,
+        artifact_dir_override=args.artifact_dir,
+    )
+    detect_anomalies(input_file=args.input_file, paths=paths)
 
 
 if __name__ == "__main__":

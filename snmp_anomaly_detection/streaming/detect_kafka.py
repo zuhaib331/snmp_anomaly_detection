@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from collections import Counter
 
@@ -9,6 +10,10 @@ from snmp_anomaly_detection.inference.event_processor import EventProcessor, Pro
 from snmp_anomaly_detection.inference.live_microbatch import (
     LiveMicroBatchProcessor,
     MicroBatchConfig,
+)
+from snmp_anomaly_detection.inference.output_schema import (
+    build_anomaly_window_record,
+    build_result_record,
 )
 from snmp_anomaly_detection.streaming.kafka_source import (
     HARDCODED_INPUT_TOPIC,
@@ -23,46 +28,23 @@ def _build_live_result_record(
     processed_window: ProcessedWindow,
     feature_config: FeatureEngineeringConfig,
 ) -> dict[str, object]:
-    record = processed_window.to_result_record(feature_config)
-    record["source"] = "kafka-live"
-    return record
+    return build_result_record(
+        processed_window=processed_window,
+        config=feature_config,
+        source="kafka-live",
+    )
 
 
 def _build_live_anomaly_window_record(
     processed_window: ProcessedWindow,
     feature_config: FeatureEngineeringConfig,
 ) -> dict[str, object]:
-    result_record = _build_live_result_record(processed_window, feature_config)
-    ready_window = processed_window.ready_window
-
-    return {
-        "source": "kafka-live",
-        "device_id": result_record["device_id"],
-        "device_window_index": result_record["device_window_index"],
-        "window_start": result_record["window_start"],
-        "window_end": result_record["window_end"],
-        "sequence_length": result_record["sequence_length"],
-        "predicted_anomaly": result_record["predicted_anomaly"],
-        "source_anomaly_label": result_record["source_anomaly_label"],
-        "reconstruction_error": result_record["reconstruction_error"],
-        "threshold": result_record["threshold"],
-        "error_margin": result_record["error_margin"],
-        "top_error_feature": result_record["top_error_feature"],
-        "top_error_timestep_offset": result_record["top_error_timestep_offset"],
-        "detection_basis": result_record["detection_basis"],
-        "feature_error_cpu": result_record["feature_error_cpu"],
-        "feature_error_memory": result_record["feature_error_memory"],
-        "feature_error_in_octets": result_record["feature_error_in_octets"],
-        "feature_error_out_octets": result_record["feature_error_out_octets"],
-        "feature_error_errors": result_record["feature_error_errors"],
-        "window_records": ready_window.records,
-        "window_summary": {
-            "record_count": len(ready_window.records),
-            "first_timestamp": result_record["window_start"],
-            "last_timestamp": result_record["window_end"],
-            "device_id": result_record["device_id"],
-        },
-    }
+    return build_anomaly_window_record(
+        processed_window=processed_window,
+        config=feature_config,
+        source="kafka-live",
+        window_records=processed_window.ready_window.records,
+    )
 
 
 def _print_processed_window(
@@ -226,7 +208,23 @@ def detect_kafka(
 
 
 def main() -> None:
-    detect_kafka()
+    parser = argparse.ArgumentParser(description="Run Kafka live anomaly detection.")
+    parser.add_argument(
+        "--artifact-dir-name",
+        help="Named artifact directory under snmp_anomaly_detection/artifacts/ to load.",
+    )
+    parser.add_argument(
+        "--artifact-dir",
+        help="Explicit artifact directory path to load model, scaler, and metadata from.",
+    )
+    args = parser.parse_args()
+
+    default_paths = ProjectPaths()
+    paths = ProjectPaths(
+        artifact_dir_name=args.artifact_dir_name or default_paths.artifact_dir_name,
+        artifact_dir_override=args.artifact_dir,
+    )
+    detect_kafka(paths=paths)
 
 
 if __name__ == "__main__":

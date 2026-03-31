@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 
 import pandas as pd
@@ -12,6 +13,11 @@ from snmp_anomaly_detection.config import (
 from snmp_anomaly_detection.inference.core import load_inference_artifacts
 from snmp_anomaly_detection.inference.event_processor import EventProcessor
 from snmp_anomaly_detection.inference.events import NormalizedEvent
+from snmp_anomaly_detection.inference.output_schema import (
+    build_anomaly_window_record,
+    build_result_record,
+    empty_results_frame,
+)
 from snmp_anomaly_detection.preprocessing.feature_engineering import load_dataset
 
 
@@ -32,68 +38,39 @@ def replay_csv_events(dataframe: pd.DataFrame) -> list[NormalizedEvent]:
     return [normalize_csv_row(row) for _, row in dataframe.iterrows()]
 
 
-def _empty_results_frame(config: FeatureEngineeringConfig) -> pd.DataFrame:
-    results = pd.DataFrame()
-    results["device_id"] = pd.Series(dtype=str)
-    results["device_window_index"] = pd.Series(dtype=int)
-    results["window_start"] = pd.Series(dtype=str)
-    results["window_end"] = pd.Series(dtype=str)
-    results["source_anomaly_label"] = pd.Series(dtype=int)
-    results["sequence_length"] = pd.Series(dtype=int)
-    results["reconstruction_error"] = pd.Series(dtype=float)
-    results["threshold"] = pd.Series(dtype=float)
-    results["error_margin"] = pd.Series(dtype=float)
-    results["predicted_anomaly"] = pd.Series(dtype=int)
-    results["top_error_feature"] = pd.Series(dtype=str)
-    results["top_error_timestep_offset"] = pd.Series(dtype=int)
-    results["detection_basis"] = pd.Series(dtype=str)
-    for feature_name in config.feature_columns:
-        results[f"feature_error_{feature_name}"] = pd.Series(dtype=float)
-    return results
-
-
 def _build_window_export(
     original_dataframe: pd.DataFrame,
-    results: pd.DataFrame,
+    processed_windows: list,
     config: FeatureEngineeringConfig,
 ) -> list[dict[str, object]]:
     anomaly_windows: list[dict[str, object]] = []
     feature_columns = list(config.feature_columns)
-
-    anomalous_rows = results[results["predicted_anomaly"] == 1]
-    if anomalous_rows.empty:
+    if not processed_windows:
         return anomaly_windows
 
-    for device_id in original_dataframe["device_id"].unique():
+    for processed_window in processed_windows:
+        if processed_window.score.predicted_anomaly != 1:
+            continue
+
+        device_id = processed_window.ready_window.device_id
         device_frame = original_dataframe[
             original_dataframe["device_id"] == device_id
         ].reset_index(drop=True)
-        device_predictions = anomalous_rows[anomalous_rows["device_id"] == device_id]
+        start_index = processed_window.ready_window.device_window_index
+        end_index = start_index + config.sequence_length
+        window_frame = device_frame.iloc[start_index:end_index].copy()
+        window_records = window_frame[
+            ["timestamp", "device_id", *feature_columns, "anomaly"]
+        ].to_dict(orient="records")
 
-        for _, row in device_predictions.iterrows():
-            start_index = int(row["device_window_index"])
-            end_index = start_index + config.sequence_length
-            window_frame = device_frame.iloc[start_index:end_index].copy()
-
-            anomaly_windows.append(
-                {
-                    "device_id": device_id,
-                    "device_window_index": start_index,
-                    "window_start": row["window_start"],
-                    "window_end": row["window_end"],
-                    "predicted_anomaly": int(row["predicted_anomaly"]),
-                    "source_anomaly_label": int(row["source_anomaly_label"]),
-                    "reconstruction_error": float(row["reconstruction_error"]),
-                    "threshold": float(row["threshold"]),
-                    "error_margin": float(row["error_margin"]),
-                    "top_error_feature": row["top_error_feature"],
-                    "top_error_timestep_offset": int(row["top_error_timestep_offset"]),
-                    "detection_basis": row["detection_basis"],
-                    "window_records": window_frame[
-                        ["timestamp", "device_id", *feature_columns, "anomaly"]
-                    ].to_dict(orient="records"),
-                }
+        anomaly_windows.append(
+            build_anomaly_window_record(
+                processed_window=processed_window,
+                config=config,
+                source="csv-replay",
+                window_records=window_records,
             )
+        )
 
     return anomaly_windows
 
@@ -122,14 +99,20 @@ def detect_csv_replay(
     processed_windows = processor.process_prepared_windows(prepared_windows)
     result_records: list[dict[str, object]] = []
     for processed_window in processed_windows:
-        result_records.append(processed_window.to_result_record(config))
+        result_records.append(
+            build_result_record(
+                processed_window=processed_window,
+                config=config,
+                source="csv-replay",
+            )
+        )
 
     results = (
         pd.DataFrame(result_records)
         if result_records
-        else _empty_results_frame(config)
+        else empty_results_frame(config)
     )
-    anomaly_windows = _build_window_export(dataframe, results, config)
+    anomaly_windows = _build_window_export(dataframe, processed_windows, config)
 
     if inference_config.save_results:
         results.to_csv(paths.anomaly_results_file, index=False)
@@ -145,7 +128,27 @@ def detect_csv_replay(
 
 
 def main() -> None:
-    detect_csv_replay()
+    parser = argparse.ArgumentParser(description="Replay a CSV file through anomaly detection.")
+    parser.add_argument(
+        "--input-file",
+        help="Optional CSV file to replay. Defaults to the configured dataset file.",
+    )
+    parser.add_argument(
+        "--artifact-dir-name",
+        help="Named artifact directory under snmp_anomaly_detection/artifacts/ to load.",
+    )
+    parser.add_argument(
+        "--artifact-dir",
+        help="Explicit artifact directory path to load model, scaler, and metadata from.",
+    )
+    args = parser.parse_args()
+
+    default_paths = ProjectPaths()
+    paths = ProjectPaths(
+        artifact_dir_name=args.artifact_dir_name or default_paths.artifact_dir_name,
+        artifact_dir_override=args.artifact_dir,
+    )
+    detect_csv_replay(input_file=args.input_file, paths=paths)
 
 
 if __name__ == "__main__":

@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     forwarded_argv = [sys.argv[0], *args.step_args]
+    sys.argv = forwarded_argv
 
     if args.step == "generate-data":
         build_dataset_main()
@@ -60,7 +61,6 @@ def main() -> None:
     elif args.step == "detect-kafka":
         detect_kafka_main()
     elif args.step == "produce-kafka-test-data":
-        sys.argv = forwarded_argv
         produce_kafka_test_data_main()
 
 

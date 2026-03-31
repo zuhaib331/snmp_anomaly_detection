@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -128,11 +129,27 @@ def run_feature_engineering(
 
 
 def main() -> None:
-    artifacts = run_feature_engineering()
+    parser = argparse.ArgumentParser(description="Run SNMP feature engineering.")
+    parser.add_argument(
+        "--artifact-dir-name",
+        help="Named artifact directory under snmp_anomaly_detection/artifacts/.",
+    )
+    parser.add_argument(
+        "--artifact-dir",
+        help="Explicit artifact directory path to use for saved arrays and scaler.",
+    )
+    args = parser.parse_args()
+
+    paths = ProjectPaths(
+        artifact_dir_name=args.artifact_dir_name or ProjectPaths().artifact_dir_name,
+        artifact_dir_override=args.artifact_dir,
+    )
+    artifacts = run_feature_engineering(paths=paths)
     print("Feature engineering completed successfully.")
     print(f"X_train shape: {artifacts.x_train.shape}")
     print(f"X_test shape: {artifacts.x_test.shape}")
-    print(f"Scaler: {ProjectPaths().scaler_file}")
+    print(f"Artifact directory: {paths.artifact_dir}")
+    print(f"Scaler: {paths.scaler_file}")
 
 
 if __name__ == "__main__":
