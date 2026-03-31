@@ -68,14 +68,19 @@ Typical files inside one artifact directory:
 
 Examples of good artifact names:
 
+- `baseline_preprocess_ready_v1`
 - `boss_demo_approved_v1`
 - `demo_trained_pipeline_v1`
-- `baseline_preprocess_ready_v1`
 - `v2_f1_rate_features_v1`
 - `v2_t1_clean_training_v1`
 
 Rule:
 - use the same artifact directory name for `preprocess`, `train`, and `detect` when they belong to the same run
+
+Current state in this repository:
+- existing preprocess artifact directory: `baseline_preprocess_ready_v1`
+- a fully trained demo artifact directory has not been created yet
+- create a new named directory when you are ready to train a stable demo or `v2` run
 
 ## 4. Recommended Branch Usage
 
@@ -88,8 +93,9 @@ Recommended git branch split:
 
 Recommended artifact split:
 
-- demo artifact example: `boss_demo_approved_v1`
-- experiment artifact example: `v2_f1_rate_features_v1`
+- current existing artifact: `baseline_preprocess_ready_v1`
+- future demo artifact example: `boss_demo_approved_v1`
+- future experiment artifact example: `v2_f1_rate_features_v1`
 
 This gives two layers of safety:
 - branch keeps demo code stable
@@ -112,6 +118,13 @@ This does the following:
 3. train the LSTM autoencoder and save model plus metadata
 4. run anomaly detection using that exact saved artifact set
 
+If you want to use the artifact directory that already exists in the repo, only preprocess has been completed so far:
+
+```bash
+python3 main.py train --artifact-dir-name baseline_preprocess_ready_v1
+python3 main.py detect --artifact-dir-name baseline_preprocess_ready_v1
+```
+
 ## 6. Run Each Step Separately
 
 ### A. Generate synthetic dataset
@@ -126,7 +139,7 @@ Output:
 ### B. Preprocess dataset
 
 ```bash
-python3 main.py preprocess --artifact-dir-name boss_demo_approved_v1
+python3 main.py preprocess --artifact-dir-name baseline_preprocess_ready_v1
 ```
 
 What this step does:
@@ -137,16 +150,16 @@ What this step does:
 - saves train/test arrays and scaler into the selected artifact directory
 
 Outputs:
-- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/X_train.npy`
-- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/X_test.npy`
-- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/y_train.npy`
-- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/y_test.npy`
-- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/scaler.pkl`
+- `snmp_anomaly_detection/artifacts/baseline_preprocess_ready_v1/X_train.npy`
+- `snmp_anomaly_detection/artifacts/baseline_preprocess_ready_v1/X_test.npy`
+- `snmp_anomaly_detection/artifacts/baseline_preprocess_ready_v1/y_train.npy`
+- `snmp_anomaly_detection/artifacts/baseline_preprocess_ready_v1/y_test.npy`
+- `snmp_anomaly_detection/artifacts/baseline_preprocess_ready_v1/scaler.pkl`
 
 ### C. Train the model
 
 ```bash
-python3 main.py train --artifact-dir-name boss_demo_approved_v1
+python3 main.py train --artifact-dir-name baseline_preprocess_ready_v1
 ```
 
 What this step does:
@@ -156,19 +169,19 @@ What this step does:
 - saves model and metadata into the same artifact directory
 
 Outputs:
-- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/lstm_autoencoder.pth`
-- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/model_metadata.json`
+- `snmp_anomaly_detection/artifacts/baseline_preprocess_ready_v1/lstm_autoencoder.pth`
+- `snmp_anomaly_detection/artifacts/baseline_preprocess_ready_v1/model_metadata.json`
 
 ### D. Run anomaly detection
 
 ```bash
-python3 main.py detect --artifact-dir-name boss_demo_approved_v1
+python3 main.py detect --artifact-dir-name baseline_preprocess_ready_v1
 ```
 
 Explicit CSV replay mode:
 
 ```bash
-python3 main.py detect-csv --artifact-dir-name boss_demo_approved_v1
+python3 main.py detect-csv --artifact-dir-name baseline_preprocess_ready_v1
 ```
 
 What this step does:
@@ -205,7 +218,7 @@ python3 main.py produce-kafka-test-data --max-messages 200 --anomaly-probability
 ### G. Run Kafka live detection
 
 ```bash
-python3 main.py detect-kafka --artifact-dir-name boss_demo_approved_v1
+python3 main.py detect-kafka --artifact-dir-name baseline_preprocess_ready_v1
 ```
 
 Notes:
@@ -220,7 +233,7 @@ Notes:
 If the dataset, scaler, and model are already available, you only need:
 
 ```bash
-python3 main.py detect --artifact-dir-name boss_demo_approved_v1
+python3 main.py detect --artifact-dir-name baseline_preprocess_ready_v1
 ```
 
 Required existing files inside that artifact directory:
@@ -249,6 +262,13 @@ git switch demo-current-pipeline-results
 python3 main.py preprocess --artifact-dir-name boss_demo_approved_v1
 python3 main.py train --artifact-dir-name boss_demo_approved_v1
 python3 main.py detect --artifact-dir-name boss_demo_approved_v1
+```
+
+If you want to reuse the artifact directory that already exists today, use:
+
+```bash
+python3 main.py train --artifact-dir-name baseline_preprocess_ready_v1
+python3 main.py detect --artifact-dir-name baseline_preprocess_ready_v1
 ```
 
 3. For later demos, rerun only detection if the artifact set is already frozen:
