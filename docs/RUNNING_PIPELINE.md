@@ -1,24 +1,16 @@
 # Running the Project
 
-This document explains how to run each module separately and how to run the full SNMP anomaly detection pipeline end to end.
+This document explains how to run the SNMP anomaly detection pipeline after the move to versioned artifact directories.
 
-## 1. Project Type
+The main idea is:
+- code version is controlled by the git branch
+- model, scaler, and training arrays are controlled by the artifact directory
 
-This is a Python project. There is no separate build or compile step like Java or C++.
+That separation is important because it lets you:
+- keep a stable demo artifact set for presentations
+- continue `v2` work without overwriting the demo model
 
-What you need instead:
-- install dependencies
-- run the required module or pipeline step
-
-Optional syntax check:
-
-```bash
-python3 -m compileall snmp_anomaly_detection
-```
-
-This only checks that the Python files compile successfully to bytecode.
-
-## 2. Environment Setup
+## 1. Environment Setup
 
 From the project root:
 
@@ -29,11 +21,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If you already have the dependencies installed, you can skip the virtual environment setup.
+Optional syntax check:
 
-## 3. Main Entry Point
+```bash
+python3 -m compileall snmp_anomaly_detection
+```
 
-The project exposes a single CLI entry point:
+## 2. Main Entry Point
+
+The project exposes one CLI entry point:
 
 ```bash
 python3 main.py --help
@@ -52,106 +48,135 @@ python3 main.py detect-kafka
 python3 main.py produce-kafka-test-data
 ```
 
-## 4. Run Each Module Separately
+## 3. Artifact Directory Concept
 
-You can run the pipeline steps one by one through `main.py` or directly as Python modules.
+Preprocessing and training artifacts are now saved in:
+
+```text
+snmp_anomaly_detection/artifacts/<artifact_dir_name>/
+```
+
+Typical files inside one artifact directory:
+
+- `X_train.npy`
+- `X_test.npy`
+- `y_train.npy`
+- `y_test.npy`
+- `scaler.pkl`
+- `lstm_autoencoder.pth`
+- `model_metadata.json`
+
+Examples of good artifact names:
+
+- `boss_demo_approved_v1`
+- `demo_trained_pipeline_v1`
+- `baseline_preprocess_ready_v1`
+- `v2_f1_rate_features_v1`
+- `v2_t1_clean_training_v1`
+
+Rule:
+- use the same artifact directory name for `preprocess`, `train`, and `detect` when they belong to the same run
+
+## 4. Recommended Branch Usage
+
+Recommended git branch split:
+
+- `demo-current-pipeline-results`
+  use this when you want to show the current stable pipeline to your boss
+- `feature-snmp-v2-interface-roadmap`
+  use this for roadmap implementation and experiments
+
+Recommended artifact split:
+
+- demo artifact example: `boss_demo_approved_v1`
+- experiment artifact example: `v2_f1_rate_features_v1`
+
+This gives two layers of safety:
+- branch keeps demo code stable
+- artifact directory keeps demo model and scaler stable
+
+## 5. Run the Full Baseline Pipeline
+
+Run these commands in order from the project root:
+
+```bash
+python3 main.py generate-data
+python3 main.py preprocess --artifact-dir-name boss_demo_approved_v1
+python3 main.py train --artifact-dir-name boss_demo_approved_v1
+python3 main.py detect --artifact-dir-name boss_demo_approved_v1
+```
+
+This does the following:
+1. generate synthetic SNMP data
+2. preprocess it and save arrays plus scaler
+3. train the LSTM autoencoder and save model plus metadata
+4. run anomaly detection using that exact saved artifact set
+
+## 6. Run Each Step Separately
 
 ### A. Generate synthetic dataset
-
-Using main entry point:
 
 ```bash
 python3 main.py generate-data
 ```
 
-Using module directly:
-
-```bash
-python3 -m snmp_anomaly_detection.data.dataset_builder
-```
-
 Output:
-- dataset CSV is saved to `snmp_anomaly_detection/data/synthetic_snmp_dataset.csv`
+- `snmp_anomaly_detection/data/synthetic_snmp_dataset.csv`
 
 ### B. Preprocess dataset
 
-This step:
+```bash
+python3 main.py preprocess --artifact-dir-name boss_demo_approved_v1
+```
+
+What this step does:
 - loads the dataset
 - keeps normal rows for training
 - scales feature columns
 - creates sequence windows
-- saves train/test arrays and scaler
-
-Using main entry point:
-
-```bash
-python3 main.py preprocess
-```
-
-Using module directly:
-
-```bash
-python3 -m snmp_anomaly_detection.preprocessing.feature_engineering
-```
+- saves train/test arrays and scaler into the selected artifact directory
 
 Outputs:
-- `snmp_anomaly_detection/utils/scaler.pkl`
-- `snmp_anomaly_detection/outputs/X_train.npy`
-- `snmp_anomaly_detection/outputs/X_test.npy`
-- `snmp_anomaly_detection/outputs/y_train.npy`
-- `snmp_anomaly_detection/outputs/y_test.npy`
+- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/X_train.npy`
+- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/X_test.npy`
+- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/y_train.npy`
+- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/y_test.npy`
+- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/scaler.pkl`
 
 ### C. Train the model
 
-This step:
-- loads training arrays
+```bash
+python3 main.py train --artifact-dir-name boss_demo_approved_v1
+```
+
+What this step does:
+- loads training arrays from the selected artifact directory
 - trains the LSTM autoencoder
 - computes the anomaly threshold
-- saves model artifacts
-
-Using main entry point:
-
-```bash
-python3 main.py train
-```
-
-Using module directly:
-
-```bash
-python3 -m snmp_anomaly_detection.training.train_model
-```
+- saves model and metadata into the same artifact directory
 
 Outputs:
-- `snmp_anomaly_detection/outputs/lstm_autoencoder.pth`
-- `snmp_anomaly_detection/outputs/model_metadata.json`
+- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/lstm_autoencoder.pth`
+- `snmp_anomaly_detection/artifacts/boss_demo_approved_v1/model_metadata.json`
 
 ### D. Run anomaly detection
 
-This step:
-- loads the dataset
-- loads scaler and trained model
-- creates detection windows
-- scores each window
-- saves anomaly detection outputs
-
-Using main entry point:
-
 ```bash
-python3 main.py detect
+python3 main.py detect --artifact-dir-name boss_demo_approved_v1
 ```
 
 Explicit CSV replay mode:
 
 ```bash
-python3 main.py detect-csv
+python3 main.py detect-csv --artifact-dir-name boss_demo_approved_v1
 ```
 
-Using module directly:
-
-```bash
-python3 -m snmp_anomaly_detection.inference.detect_anomalies
-python3 -m snmp_anomaly_detection.inference.csv_replay
-```
+What this step does:
+- loads the dataset
+- loads scaler, model, and metadata from the selected artifact directory
+- creates detection windows
+- scores each window
+- saves anomaly detection outputs
 
 Outputs:
 - `snmp_anomaly_detection/outputs/anomaly_results.csv`
@@ -159,39 +184,17 @@ Outputs:
 
 ### E. Run Kafka dry ingestion
 
-This step:
-- connects to Kafka
-- consumes messages from the hardcoded topic
-- decodes JSON payloads
-- normalizes them into the shared event shape
-- does not run anomaly scoring yet
-
-Using main entry point:
-
 ```bash
 python3 main.py detect-kafka-dry
 ```
 
-Using module directly:
-
-```bash
-python3 -m snmp_anomaly_detection.streaming.detect_kafka_dry
-```
-
 Notes:
-- current v1 topic is hardcoded in code
-- `kafka-python` must be installed
-- stop the dry consumer with `Ctrl+C`
+- consumes Kafka messages from the hardcoded topic
+- validates and normalizes payloads
+- does not perform anomaly scoring
+- stop with `Ctrl+C`
 
 ### F. Publish Kafka test data
-
-This step:
-- generates fresh synthetic SNMP events in memory
-- creates continuous per-device telemetry for a shared topic
-- injects anomalies probabilistically for testing
-- publishes messages in the same JSON schema expected by the Kafka consumer
-
-Using main entry point:
 
 ```bash
 python3 main.py produce-kafka-test-data
@@ -199,114 +202,113 @@ python3 main.py produce-kafka-test-data --device-count 20 --sleep-seconds 0.05
 python3 main.py produce-kafka-test-data --max-messages 200 --anomaly-probability 0.10
 ```
 
-Using module directly:
-
-```bash
-python3 -m snmp_anomaly_detection.streaming.produce_kafka_test_data
-```
-
-Notes:
-- the producer sends to the same hardcoded topic used by `detect-kafka-dry`
-- messages include: `timestamp`, `device_id`, `cpu`, `memory`, `in_octets`, `out_octets`, `errors`, `anomaly`
-- default behavior is continuous streaming until `Ctrl+C`
-- detailed test-generator guide: `docs/streaming/KAFKA_TEST_DATA_GENERATOR.md`
-
 ### G. Run Kafka live detection
 
-This step:
-- connects to Kafka
-- validates incoming messages
-- normalizes valid payloads into shared events
-- builds per-device rolling windows
-- applies live micro-batching
-- prints live anomaly results locally
-
-Using main entry point:
-
 ```bash
-python3 main.py detect-kafka
-```
-
-Using module directly:
-
-```bash
-python3 -m snmp_anomaly_detection.streaming.detect_kafka
+python3 main.py detect-kafka --artifact-dir-name boss_demo_approved_v1
 ```
 
 Notes:
-- current v1 topic is hardcoded in code
-- live results are printed to the terminal
-- live results are also written locally to `snmp_anomaly_detection/outputs/kafka_live_results.jsonl`
-- anomalous live windows are also written locally to `snmp_anomaly_detection/outputs/kafka_live_anomaly_windows.jsonl`
-- stop the live consumer with `Ctrl+C`
+- live scoring loads model and scaler from the selected artifact directory
+- local JSONL outputs are still written to:
+  `snmp_anomaly_detection/outputs/kafka_live_results.jsonl`
+  `snmp_anomaly_detection/outputs/kafka_live_anomaly_windows.jsonl`
+- stop with `Ctrl+C`
 
-## 5. Run the Full Pipeline End to End
-
-Run these commands in order from the project root:
-
-```bash
-python3 main.py generate-data
-python3 main.py preprocess
-python3 main.py train
-python3 main.py detect
-```
-
-This executes the full pipeline:
-1. create synthetic SNMP data
-2. preprocess and scale data
-3. train the LSTM autoencoder
-4. run anomaly detection and save results
-
-## 6. Minimal Detection-Only Flow
+## 7. Minimal Detection-Only Flow
 
 If the dataset, scaler, and model are already available, you only need:
 
 ```bash
-python3 main.py detect
+python3 main.py detect --artifact-dir-name boss_demo_approved_v1
 ```
 
-Required existing files:
-- `snmp_anomaly_detection/utils/scaler.pkl`
-- `snmp_anomaly_detection/outputs/lstm_autoencoder.pth`
-- `snmp_anomaly_detection/outputs/model_metadata.json`
-- dataset CSV in one of the supported locations
+Required existing files inside that artifact directory:
+- `scaler.pkl`
+- `lstm_autoencoder.pth`
+- `model_metadata.json`
 
 Supported dataset lookup order:
 - `snmp_anomaly_detection/data/synthetic_snmp_dataset.csv`
 - `synthetic_snmp_dataset.csv`
 - `featureEngineering/synthetic_snmp_dataset.csv`
 
-## 7. Important Output Locations
+## 8. Demo-Safe Workflow
 
-Main outputs are stored here:
+If you need a stable demo for your boss:
 
-- dataset: `snmp_anomaly_detection/data/synthetic_snmp_dataset.csv`
-- scaler: `snmp_anomaly_detection/utils/scaler.pkl`
-- training arrays: `snmp_anomaly_detection/outputs/`
-- model: `snmp_anomaly_detection/outputs/lstm_autoencoder.pth`
-- metadata: `snmp_anomaly_detection/outputs/model_metadata.json`
-- detection CSV: `snmp_anomaly_detection/outputs/anomaly_results.csv`
-- anomaly windows JSON: `snmp_anomaly_detection/outputs/anomaly_windows.json`
+1. Switch to the demo branch:
 
-## 8. Quick Verification
+```bash
+git switch demo-current-pipeline-results
+```
 
-To check that the package imports correctly:
+2. Run or reuse the demo artifact set:
+
+```bash
+python3 main.py preprocess --artifact-dir-name boss_demo_approved_v1
+python3 main.py train --artifact-dir-name boss_demo_approved_v1
+python3 main.py detect --artifact-dir-name boss_demo_approved_v1
+```
+
+3. For later demos, rerun only detection if the artifact set is already frozen:
+
+```bash
+python3 main.py detect --artifact-dir-name boss_demo_approved_v1
+```
+
+This prevents retraining in `v2` work from silently changing the demo model.
+
+## 9. Experiment Workflow For V2
+
+When doing roadmap work, use a new artifact name for each meaningful milestone.
+
+Example:
+
+```bash
+python3 main.py preprocess --artifact-dir-name v2_f1_rate_features_v1
+python3 main.py train --artifact-dir-name v2_f1_rate_features_v1
+python3 main.py detect --artifact-dir-name v2_f1_rate_features_v1
+```
+
+Do not overwrite a demo artifact directory with experiment runs.
+
+## 10. Important Output Locations
+
+Main locations:
+
+- dataset:
+  `snmp_anomaly_detection/data/synthetic_snmp_dataset.csv`
+- artifact directories:
+  `snmp_anomaly_detection/artifacts/`
+- detection CSV:
+  `snmp_anomaly_detection/outputs/anomaly_results.csv`
+- anomaly windows JSON:
+  `snmp_anomaly_detection/outputs/anomaly_windows.json`
+- Kafka live results:
+  `snmp_anomaly_detection/outputs/kafka_live_results.jsonl`
+- Kafka live anomaly windows:
+  `snmp_anomaly_detection/outputs/kafka_live_anomaly_windows.jsonl`
+
+## 11. Quick Verification
+
+To verify the Python files compile:
 
 ```bash
 python3 -m compileall snmp_anomaly_detection
 ```
 
-To test the full working flow:
+To verify the full baseline flow:
 
 ```bash
 python3 main.py generate-data
-python3 main.py preprocess
-python3 main.py train
-python3 main.py detect
+python3 main.py preprocess --artifact-dir-name verification_run_v1
+python3 main.py train --artifact-dir-name verification_run_v1
+python3 main.py detect --artifact-dir-name verification_run_v1
 ```
 
-If detection completes successfully, the final result files should appear in:
+If detection completes successfully, check:
 
-```text
-snmp_anomaly_detection/outputs/
-```
+- `snmp_anomaly_detection/artifacts/verification_run_v1/`
+- `snmp_anomaly_detection/outputs/anomaly_results.csv`
+- `snmp_anomaly_detection/outputs/anomaly_windows.json`
