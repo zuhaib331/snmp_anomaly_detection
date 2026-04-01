@@ -25,6 +25,7 @@ def normalize_csv_row(row: pd.Series) -> NormalizedEvent:
     return NormalizedEvent(
         timestamp=row["timestamp"],
         device_id=str(row["device_id"]),
+        interface=None if pd.isna(row.get("interface")) else str(row.get("interface")),
         cpu=float(row["cpu"]),
         memory=float(row["memory"]),
         in_octets=float(row["in_octets"]),
@@ -39,12 +40,10 @@ def replay_csv_events(dataframe: pd.DataFrame) -> list[NormalizedEvent]:
 
 
 def _build_window_export(
-    original_dataframe: pd.DataFrame,
     processed_windows: list,
     config: FeatureEngineeringConfig,
 ) -> list[dict[str, object]]:
     anomaly_windows: list[dict[str, object]] = []
-    feature_columns = list(config.feature_columns)
     if not processed_windows:
         return anomaly_windows
 
@@ -52,23 +51,12 @@ def _build_window_export(
         if processed_window.score.predicted_anomaly != 1:
             continue
 
-        device_id = processed_window.ready_window.device_id
-        device_frame = original_dataframe[
-            original_dataframe["device_id"] == device_id
-        ].reset_index(drop=True)
-        start_index = processed_window.ready_window.device_window_index
-        end_index = start_index + config.sequence_length
-        window_frame = device_frame.iloc[start_index:end_index].copy()
-        window_records = window_frame[
-            ["timestamp", "device_id", *feature_columns, "anomaly"]
-        ].to_dict(orient="records")
-
         anomaly_windows.append(
             build_anomaly_window_record(
                 processed_window=processed_window,
                 config=config,
                 source="csv-replay",
-                window_records=window_records,
+                window_records=processed_window.ready_window.records,
             )
         )
 
@@ -112,7 +100,7 @@ def detect_csv_replay(
         if result_records
         else empty_results_frame(config)
     )
-    anomaly_windows = _build_window_export(dataframe, processed_windows, config)
+    anomaly_windows = _build_window_export(processed_windows, config)
 
     if inference_config.save_results:
         results.to_csv(paths.anomaly_results_file, index=False)

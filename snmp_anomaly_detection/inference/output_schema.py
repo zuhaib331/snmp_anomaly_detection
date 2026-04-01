@@ -27,6 +27,8 @@ def build_anomaly_window_record(
     return {
         "source": source,
         "device_id": result_record["device_id"],
+        "interface": result_record["interface"],
+        "stream_id": result_record["stream_id"],
         "device_window_index": result_record["device_window_index"],
         "window_start": result_record["window_start"],
         "window_end": result_record["window_end"],
@@ -39,17 +41,17 @@ def build_anomaly_window_record(
         "top_error_feature": result_record["top_error_feature"],
         "top_error_timestep_offset": result_record["top_error_timestep_offset"],
         "detection_basis": result_record["detection_basis"],
-        "feature_error_cpu": result_record["feature_error_cpu"],
-        "feature_error_memory": result_record["feature_error_memory"],
-        "feature_error_in_octets": result_record["feature_error_in_octets"],
-        "feature_error_out_octets": result_record["feature_error_out_octets"],
-        "feature_error_errors": result_record["feature_error_errors"],
+        **{
+            f"feature_error_{feature_name}": result_record[f"feature_error_{feature_name}"]
+            for feature_name in config.feature_columns
+        },
         "window_records": window_records,
         "window_summary": {
             "record_count": len(window_records),
             "first_timestamp": result_record["window_start"],
             "last_timestamp": result_record["window_end"],
             "device_id": result_record["device_id"],
+            "interface": result_record["interface"],
         },
     }
 
@@ -58,6 +60,8 @@ def empty_results_frame(config: FeatureEngineeringConfig) -> pd.DataFrame:
     results = pd.DataFrame()
     results["source"] = pd.Series(dtype=str)
     results["device_id"] = pd.Series(dtype=str)
+    results["interface"] = pd.Series(dtype=str)
+    results["stream_id"] = pd.Series(dtype=str)
     results["device_window_index"] = pd.Series(dtype=int)
     results["window_start"] = pd.Series(dtype=str)
     results["window_end"] = pd.Series(dtype=str)

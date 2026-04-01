@@ -8,6 +8,7 @@ from typing import Any
 class NormalizedEvent:
     timestamp: Any
     device_id: str
+    interface: str | None
     cpu: float
     memory: float
     in_octets: float
@@ -19,6 +20,7 @@ class NormalizedEvent:
         return {
             "timestamp": self.timestamp,
             "device_id": self.device_id,
+            "interface": self.interface,
             "cpu": self.cpu,
             "memory": self.memory,
             "in_octets": self.in_octets,

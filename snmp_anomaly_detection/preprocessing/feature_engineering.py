@@ -10,6 +10,9 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
 from snmp_anomaly_detection.config import FeatureEngineeringConfig, ProjectPaths
+from snmp_anomaly_detection.preprocessing.derived_features import (
+    derive_rate_features_dataframe,
+)
 
 
 @dataclass(frozen=True)
@@ -36,13 +39,22 @@ def load_dataset(input_file: str | None = None, paths: ProjectPaths | None = Non
 
     dataframe = pd.read_csv(dataset_path)
     dataframe["timestamp"] = pd.to_datetime(dataframe["timestamp"])
-    return dataframe.sort_values(by=["device_id", "timestamp"]).reset_index(drop=True)
+    sort_columns = ["device_id"]
+    if "interface" in dataframe.columns:
+        sort_columns.append("interface")
+    sort_columns.append("timestamp")
+    return dataframe.sort_values(by=sort_columns).reset_index(drop=True)
 
 
 def filter_normal_rows(
     dataframe: pd.DataFrame, config: FeatureEngineeringConfig
 ) -> pd.DataFrame:
-    return dataframe[dataframe["anomaly"] == config.normal_label].copy()
+    filtered = dataframe[dataframe["anomaly"] == config.normal_label].copy()
+    if "elapsed_seconds" in filtered.columns:
+        filtered = filtered[filtered["elapsed_seconds"] > 0]
+    if "reset_detected" in filtered.columns:
+        filtered = filtered[filtered["reset_detected"] == 0]
+    return filtered.copy()
 
 
 def scale_features(
@@ -73,9 +85,11 @@ def build_device_sequences(
 ) -> np.ndarray:
     chunks = []
     feature_columns = list(config.feature_columns)
+    group_columns = ["device_id"]
+    if "interface" in dataframe.columns:
+        group_columns.append("interface")
 
-    for device_id in dataframe["device_id"].unique():
-        device_frame = dataframe[dataframe["device_id"] == device_id]
+    for _, device_frame in dataframe.groupby(group_columns, dropna=False):
         device_values = device_frame[feature_columns].values
         device_sequences = create_sequences(device_values, config.sequence_length)
 
@@ -120,6 +134,7 @@ def run_feature_engineering(
     paths.ensure_directories()
 
     dataframe = load_dataset(input_file=input_file, paths=paths)
+    dataframe = derive_rate_features_dataframe(dataframe)
     train_frame = filter_normal_rows(dataframe, config)
     scaled_frame, _ = scale_features(train_frame, config, paths)
     sequences = build_device_sequences(scaled_frame, config)

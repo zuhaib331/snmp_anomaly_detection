@@ -11,7 +11,12 @@ from typing import Iterator
 import numpy as np
 
 from snmp_anomaly_detection.config import KafkaConfig
-from snmp_anomaly_detection.data.dataset_builder import generate_normal_pattern, inject_anomaly
+from snmp_anomaly_detection.data.dataset_builder import (
+    build_device_profile,
+    generate_normal_pattern,
+    inject_anomaly,
+    pick_anomaly_type,
+)
 from snmp_anomaly_detection.streaming.kafka_source import HARDCODED_INPUT_TOPIC
 
 try:
@@ -33,8 +38,13 @@ class SyntheticStreamConfig:
 @dataclass
 class DeviceState:
     device_id: str
+    interface: str
+    device_type: str
     timestep: int = 0
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    cumulative_in_octets: float = 0.0
+    cumulative_out_octets: float = 0.0
+    cumulative_errors: int = 0
 
 
 def _require_kafka() -> None:
@@ -57,9 +67,12 @@ def _build_producer(config: KafkaConfig | None = None):
 
 def _build_device_states(config: SyntheticStreamConfig) -> list[DeviceState]:
     base_time = datetime.now(timezone.utc)
+    device_types = ("Router", "Switch", "Firewall")
     return [
         DeviceState(
             device_id=f"dev_{index}",
+            interface=f"eth{random.randint(0, 3)}",
+            device_type=random.choice(device_types),
             timestep=index,
             timestamp=base_time + timedelta(seconds=index),
         )
@@ -68,31 +81,56 @@ def _build_device_states(config: SyntheticStreamConfig) -> list[DeviceState]:
 
 
 def _build_payload(device_state: DeviceState, config: SyntheticStreamConfig) -> dict[str, object]:
-    traffic = generate_normal_pattern(device_state.timestep)
-    cpu = float(np.clip(np.random.normal(40, 10), 0, 100))
-    memory = float(np.clip(np.random.normal(60, 15), 0, 100))
-    in_octets = float(max(traffic * random.uniform(800, 1200), 0))
-    out_octets = float(max(traffic * random.uniform(700, 1100), 0))
-    errors = float(np.random.poisson(1))
+    profile = build_device_profile(device_state.device_type)
+    traffic = generate_normal_pattern(device_state.timestep) * profile.traffic_scale
+    cpu = float(np.clip(np.random.normal(profile.base_cpu, 8), 0, 100))
+    memory = float(np.clip(np.random.normal(profile.base_memory, 10), 0, 100))
+    in_octets_increment = float(max(traffic * random.uniform(800, 1200), 0))
+    out_octets_increment = float(max(traffic * random.uniform(700, 1100), 0))
+    errors_increment = int(np.random.poisson(1))
+    anomaly_type = "normal"
 
     anomaly = 0
     if random.random() < config.anomaly_probability:
-        cpu = float(np.clip(inject_anomaly(cpu), 0, 100))
-        memory = float(np.clip(inject_anomaly(memory), 0, 100))
-        in_octets = float(max(inject_anomaly(in_octets), 0))
-        out_octets = float(max(inject_anomaly(out_octets), 0))
-        errors = float(max(int(inject_anomaly(errors + 1)), 0))
+        anomaly_type = pick_anomaly_type()
+        if anomaly_type == "traffic_spike":
+            in_octets_increment *= random.uniform(2.5, 4.5)
+            out_octets_increment *= random.uniform(2.0, 4.0)
+            cpu = float(np.clip(cpu + random.uniform(8, 20), 0, 100))
+        elif anomaly_type == "traffic_drop":
+            in_octets_increment *= random.uniform(0.02, 0.20)
+            out_octets_increment *= random.uniform(0.02, 0.20)
+        elif anomaly_type == "error_burst":
+            errors_increment += random.randint(20, 120)
+        elif anomaly_type == "cpu_spike":
+            cpu = float(np.clip(inject_anomaly(cpu), 0, 100))
+        elif anomaly_type == "memory_spike":
+            memory = float(np.clip(inject_anomaly(memory), 0, 100))
+        elif anomaly_type == "link_down":
+            in_octets_increment = 0.0
+            out_octets_increment = 0.0
+            errors_increment += random.randint(1, 10)
         anomaly = 1
+
+    in_octets_increment = max(in_octets_increment, 0.0)
+    out_octets_increment = max(out_octets_increment, 0.0)
+    errors_increment = max(errors_increment, 0)
+
+    device_state.cumulative_in_octets += in_octets_increment
+    device_state.cumulative_out_octets += out_octets_increment
+    device_state.cumulative_errors += errors_increment
 
     payload = {
         "timestamp": device_state.timestamp.isoformat(),
         "device_id": device_state.device_id,
+        "interface": device_state.interface,
         "cpu": round(cpu, 2),
         "memory": round(memory, 2),
-        "in_octets": round(in_octets, 2),
-        "out_octets": round(out_octets, 2),
-        "errors": round(errors, 2),
+        "in_octets": round(device_state.cumulative_in_octets, 2),
+        "out_octets": round(device_state.cumulative_out_octets, 2),
+        "errors": device_state.cumulative_errors,
         "anomaly": anomaly,
+        "anomaly_type": anomaly_type,
     }
 
     device_state.timestep += 1

@@ -3,17 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-import pandas as pd
 
 from snmp_anomaly_detection.config import FeatureEngineeringConfig
 from snmp_anomaly_detection.inference.core import (
     InferenceArtifacts,
     WindowScore,
+    scale_window,
     score_window,
     score_windows,
 )
 from snmp_anomaly_detection.inference.events import NormalizedEvent
 from snmp_anomaly_detection.inference.window_manager import DeviceWindowManager, ReadyWindow
+from snmp_anomaly_detection.preprocessing.derived_features import OnlineRateFeatureBuilder
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,8 @@ class ProcessedWindow:
     def to_result_record(self, config: FeatureEngineeringConfig) -> dict[str, object]:
         result = {
             "device_id": self.ready_window.device_id,
+            "interface": self.ready_window.interface,
+            "stream_id": self.ready_window.stream_id,
             "device_window_index": self.ready_window.device_window_index,
             "window_start": self.ready_window.window_start,
             "window_end": self.ready_window.window_end,
@@ -53,8 +56,13 @@ class PreparedWindow:
         artifacts: InferenceArtifacts,
         config: FeatureEngineeringConfig,
     ) -> ProcessedWindow:
-        score = score_window(
+        scaled_window = scale_window(
             self.ready_window.values,
+            scaler=artifacts.scaler,
+            config=config,
+        )
+        score = score_window(
+            scaled_window,
             artifacts=artifacts,
             config=config,
         )
@@ -72,35 +80,13 @@ class EventProcessor:
         self.artifacts = artifacts
         self.window_manager = window_manager or DeviceWindowManager(self.config)
         self.feature_columns = list(self.config.feature_columns)
-
-    def _scale_event(self, event: NormalizedEvent) -> NormalizedEvent:
-        feature_frame = pd.DataFrame(
-            [
-                {
-                    feature_name: getattr(event, feature_name)
-                    for feature_name in self.feature_columns
-                }
-            ]
-        )
-        scaled_values = self.artifacts.scaler.transform(feature_frame)[0]
-        scaled_map = {
-            feature_name: float(scaled_values[index])
-            for index, feature_name in enumerate(self.feature_columns)
-        }
-        return NormalizedEvent(
-            timestamp=event.timestamp,
-            device_id=event.device_id,
-            cpu=scaled_map["cpu"],
-            memory=scaled_map["memory"],
-            in_octets=scaled_map["in_octets"],
-            out_octets=scaled_map["out_octets"],
-            errors=scaled_map["errors"],
-            anomaly=event.anomaly,
-        )
+        self.feature_builder = OnlineRateFeatureBuilder()
 
     def prepare_event(self, event: NormalizedEvent) -> PreparedWindow | None:
-        scaled_event = self._scale_event(event)
-        ready_window = self.window_manager.add_event(scaled_event.to_record())
+        derived = self.feature_builder.transform(event)
+        if derived is None:
+            return None
+        ready_window = self.window_manager.add_event(derived.record)
         if ready_window is None:
             return None
 
@@ -122,7 +108,14 @@ class EventProcessor:
             return []
 
         scaled_windows = np.array(
-            [prepared_window.ready_window.values for prepared_window in prepared_windows],
+            [
+                scale_window(
+                    prepared_window.ready_window.values,
+                    scaler=self.artifacts.scaler,
+                    config=self.config,
+                )
+                for prepared_window in prepared_windows
+            ],
             dtype=float,
         )
         scores = score_windows(

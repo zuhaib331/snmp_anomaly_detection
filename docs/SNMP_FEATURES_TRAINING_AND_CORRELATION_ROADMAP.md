@@ -33,31 +33,49 @@ This roadmap closes that gap in phases.
 The current model uses these feature columns:
 - `cpu`
 - `memory`
-- `in_octets`
-- `out_octets`
-- `errors`
+- `in_rate`
+- `out_rate`
+- `error_rate`
 
 Current sequence settings:
 - `sequence_length = 10`
-- one rolling window per device after warm-up
+- one rolling window per `device_id + interface` stream after warm-up
 
 Current model:
 - LSTM autoencoder
-- trained mostly on synthetic SNMP-like data
+- trained on a richer synthetic SNMP-like dataset with cumulative counters and interface-level metadata
 - threshold derived from reconstruction error on normal training windows
 
 Current strengths:
 - simple and understandable
 - good for pipeline validation
 - suitable for first anomaly experiments
+- now supports interface-scoped rate-based feature engineering across offline and replay paths
 
 Current limitations:
-- relies heavily on raw values instead of stronger derived features
-- uses synthetic data patterns that are simpler than production telemetry
-- does not model interface capacity or utilization
-- does not yet use discards, packet counters, or interface state
+- still uses synthetic data patterns that are simpler than production telemetry
+- does not yet model interface capacity or utilization in the active feature set
+- richer packet, discard, and interface-state fields exist in the dataset, but are not yet used by the active model
 - does not yet correlate anomalies with syslog, traps, flow summaries, or status events
 - cannot yet explain likely root cause beyond "top error feature"
+
+## Implementation Status
+
+Current roadmap status:
+
+- Stage `P0`: completed for the synthetic baseline
+- Phase `F1`: implemented
+- Phase `T1`: pending
+- Phase `T2`: pending
+- Phase `F2`: pending
+- Phase `F3`: pending
+- Phases `C1-C3`: pending
+
+Verified current baseline details:
+- active feature set = `cpu`, `memory`, `in_rate`, `out_rate`, `error_rate`
+- artifact directory used for the validated F1 baseline = `f1_baseline_v1`
+- current validated threshold from that baseline = `0.014308651676401496`
+- latest CSV replay baseline run evaluated `29850` windows and predicted `1821` anomalies
 
 ## Prerequisites
 
@@ -177,6 +195,81 @@ Lower-priority improvements for later:
 - dynamic per-device adaptive models
 - online retraining in stream
 
+## Prerequisites By Work Stage
+
+The prerequisites do not need to be completed all at once.
+They should be fulfilled in the same order as the roadmap work.
+
+### Stage P0: Before Phase F1
+
+Required before derived-rate feature work starts:
+- verify stable `device_id`, `timestamp`, and `interface` availability for the main production path
+- classify devices into `per-interface` ready vs `per-device` fallback
+- audit polling continuity, missing rows, duplicate rows, out-of-order rows, and obvious counter reset behavior
+- confirm the raw dataset has enough counters to derive `in_rate`, `out_rate`, and `error_rate`
+- freeze one baseline dataset slice that will be reused for comparison later
+
+Why now:
+- F1 depends directly on trustworthy sequential SNMP records and interface-level identifiers
+
+Expected output of this stage:
+- dataset inventory
+- data quality audit
+- baseline dataset selection
+
+Current status:
+- completed for the richer synthetic dataset
+- dataset inventory and quality audit reports are saved under `snmp_anomaly_detection/outputs/`
+- cumulative counters were corrected so default synthetic data no longer produces negative deltas
+- the synthetic dataset now includes richer production-like fields such as packet counters, discard counters, interface speed, interface status, anomaly type, and counter reset flags
+
+### Stage P1: Before Phase T1 and T2
+
+Required before retraining and preprocessing comparison work starts:
+- define a repeatable time-based train/validation/test split
+- identify known-normal periods, suspicious periods, and maintenance windows where possible
+- define the baseline evaluation workflow and save the current baseline metrics
+- confirm versioned artifact usage for scaler, training arrays, model, and metadata
+
+Why now:
+- T1 and T2 depend on stable evaluation and reproducible preprocessing behavior
+
+Expected output of this stage:
+- time-split definition
+- baseline metrics report
+- named artifact directory for the baseline run
+
+### Stage P2: Before Phase F2 and F3
+
+Required before richer interface-centric feature work starts:
+- confirm whether interface speed, capacity, packet counters, discard counters, and admin/oper status are available
+- document which devices can support full `per-interface` production features
+- document which devices require `per-device` fallback compatibility only
+- define the schema fields needed for interface-level feature rows and outputs
+
+Why now:
+- F2 and F3 should only be implemented after you know which interface metadata is actually present
+
+Expected output of this stage:
+- interface capability matrix
+- schema note for extended SNMP feature rows
+
+### Stage P3: Before Phase C1, C2, and C3
+
+Required before event correlation work starts:
+- choose at least one non-SNMP event source to normalize first
+- verify timestamp alignment quality between SNMP and the selected event source
+- define the normalized event schema fields needed for correlation
+- confirm whether interface identifiers are available in the selected event source
+
+Why now:
+- correlation quality depends more on timestamp and key alignment than on model complexity
+
+Expected output of this stage:
+- first event source selection
+- normalized event schema draft
+- timestamp alignment notes
+
 ## Feature Engineering Roadmap
 
 ### Phase F1: Replace Raw Counter Emphasis With Derived Rates
@@ -217,6 +310,19 @@ Example:
 - Counter resets do not produce false spikes.
 - Polling gaps and irregular intervals are handled explicitly and tested.
 - Existing CSV replay and Kafka paths can carry the new feature set.
+
+#### Current Status
+
+- implemented
+- preprocessing now derives `in_rate`, `out_rate`, and `error_rate` from cumulative counters
+- training now uses `cpu`, `memory`, `in_rate`, `out_rate`, and `error_rate`
+- windowing and replay outputs now carry `interface` and `stream_id`
+- online replay and Kafka paths use the same reset-aware elapsed-time rate logic
+
+#### Notes From Implementation
+
+- richer dataset fields for packet counters, discard counters, interface speed, and interface state are now present in synthetic data and ready for `F2`
+- the active model still focuses on the F1 feature set only
 
 ### Phase F2: Add Interface Capacity and Health Features
 

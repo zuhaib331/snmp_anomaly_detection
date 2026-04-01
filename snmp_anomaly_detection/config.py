@@ -117,9 +117,9 @@ class FeatureEngineeringConfig:
     feature_columns: tuple[str, ...] = (
         "cpu",
         "memory",
-        "in_octets",
-        "out_octets",
-        "errors",
+        "in_rate",
+        "out_rate",
+        "error_rate",
     )
     train_split: float = 0.8
     normal_label: int = 0

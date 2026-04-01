@@ -12,6 +12,8 @@ from snmp_anomaly_detection.config import FeatureEngineeringConfig
 @dataclass(frozen=True)
 class ReadyWindow:
     device_id: str
+    interface: str | None
+    stream_id: str
     device_window_index: int
     window_start: str
     window_end: str
@@ -31,15 +33,20 @@ class DeviceWindowManager:
 
     def add_event(self, event: Mapping[str, Any]) -> ReadyWindow | None:
         device_id = str(event["device_id"])
-        buffer = self._buffers[device_id]
+        interface = event.get("interface")
+        interface_value = None if interface in (None, "", "nan") else str(interface)
+        stream_id = (
+            f"{device_id}::{interface_value}" if interface_value is not None else device_id
+        )
+        buffer = self._buffers[stream_id]
         normalized_event = dict(event)
         buffer.append(normalized_event)
 
         if len(buffer) < self.config.sequence_length:
             return None
 
-        device_window_index = self._window_counts[device_id]
-        self._window_counts[device_id] += 1
+        device_window_index = self._window_counts[stream_id]
+        self._window_counts[stream_id] += 1
 
         window_records = list(buffer)
         values = np.array(
@@ -52,6 +59,8 @@ class DeviceWindowManager:
 
         return ReadyWindow(
             device_id=device_id,
+            interface=interface_value,
+            stream_id=stream_id,
             device_window_index=device_window_index,
             window_start=str(window_records[0]["timestamp"]),
             window_end=str(window_records[-1]["timestamp"]),

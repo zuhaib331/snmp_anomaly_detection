@@ -40,6 +40,7 @@ class KafkaValidationResult:
 REQUIRED_KAFKA_FIELDS: tuple[str, ...] = (
     "timestamp",
     "device_id",
+    "interface",
     "cpu",
     "memory",
     "in_octets",
@@ -116,6 +117,7 @@ def normalize_kafka_payload(payload: dict[str, Any]) -> NormalizedEvent:
     return NormalizedEvent(
         timestamp=timestamp,
         device_id=str(payload["device_id"]),
+        interface=str(payload["interface"]) if payload.get("interface") is not None else None,
         cpu=float(payload["cpu"]),
         memory=float(payload["memory"]),
         in_octets=float(payload["in_octets"]),
