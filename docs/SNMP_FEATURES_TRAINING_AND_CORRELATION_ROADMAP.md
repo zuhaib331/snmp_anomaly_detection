@@ -1,292 +1,412 @@
 # SNMP Features, Training, and Correlation Roadmap
 
-## Objective
+## Purpose
 
-Define a phased plan to improve:
-- SNMP feature quality
-- anomaly model training quality
-- post-detection correlation with operational events
+This document is the working roadmap for the SNMP anomaly project.
+It is written to answer four simple questions:
 
-This document is intended to guide the next stage of the project after the current SNMP-only anomaly pipeline.
+- where we are now
+- what we have already achieved
+- what must be done before the next phase
+- what we should do next
 
-## Why This Document Exists
+The goal is to improve three areas in a controlled order:
 
-The current project already proves an important baseline:
-- per-device rolling windows work
-- an LSTM autoencoder can score SNMP windows
-- CSV replay and Kafka live scoring share the same downstream pipeline
+- better SNMP features
+- better model training and evaluation
+- better correlation with operational events
 
-That is a good foundation, but it is still a narrow anomaly detector.
+## One-Page Summary
 
-Today the project mainly answers:
+Current project status in plain language:
+
+- the SNMP anomaly pipeline works end to end
+- interface-scoped rolling windows are working
+- CSV replay and Kafka live scoring share the same downstream logic
+- `P0` is completed
+- `F1` is completed
+- `P1` is completed for the synthetic baseline
+- `T1` is in progress
+- the validated artifact set is `f1_baseline_v1`
+- the next recommended work is `T1`, then `T2`
+
+Current validated baseline:
+
+- active feature set:
+  `cpu`, `memory`, `in_rate`, `out_rate`, `error_rate`
+- sequence length:
+  `10`
+- model:
+  LSTM autoencoder
+- threshold source:
+  reconstruction error on normal training windows
+- validated artifact directory:
+  `f1_baseline_v1`
+- validated threshold:
+  `0.014308651676401496`
+- latest replay result:
+  `29850` windows evaluated, `1821` predicted anomalies
+
+## Why This Roadmap Exists
+
+The current pipeline already answers this question well:
+
 - "Does this SNMP window look abnormal?"
 
-It does not yet answer well:
+It does not yet answer these questions well:
+
 - "Why did this happen?"
-- "Which network event likely caused it?"
-- "How can we reduce false positives from normal but unusual traffic changes?"
+- "Is this a traffic spike, congestion issue, interface problem, or status change?"
+- "Which nearby event likely explains the anomaly?"
+- "How do we reduce false positives?"
 
-This roadmap closes that gap in phases.
+This roadmap closes that gap in phases, so we can improve the system without losing the stable baseline.
 
-## Current State
+## Current Scope Decision
 
-The current model uses these feature columns:
-- `cpu`
-- `memory`
-- `in_rate`
-- `out_rate`
-- `error_rate`
+The project now follows one primary production direction:
 
-Current sequence settings:
-- `sequence_length = 10`
-- one rolling window per `device_id + interface` stream after warm-up
+- main scope = `per-interface`
+- fallback scope = `per-device` only when interface telemetry is not available
 
-Current model:
-- LSTM autoencoder
-- trained on a richer synthetic SNMP-like dataset with cumulative counters and interface-level metadata
-- threshold derived from reconstruction error on normal training windows
+Why this decision matters:
 
-Current strengths:
-- simple and understandable
-- good for pipeline validation
-- suitable for first anomaly experiments
-- now supports interface-scoped rate-based feature engineering across offline and replay paths
+- traffic rates, utilization, discards, and interface state are more meaningful at interface level
+- alerts are easier to triage when we know the affected interface
+- correlation with future event sources is easier when anomalies already point to a specific interface
+- we should not silently mix interface-level and device-level behavior into the same baseline
 
-Current limitations:
-- still uses synthetic data patterns that are simpler than production telemetry
-- does not yet model interface capacity or utilization in the active feature set
-- richer packet, discard, and interface-state fields exist in the dataset, but are not yet used by the active model
-- does not yet correlate anomalies with syslog, traps, flow summaries, or status events
-- cannot yet explain likely root cause beyond "top error feature"
+Rule for the roadmap:
 
-## Implementation Status
+- keep `per-interface` as the main path
+- keep `per-device` as a clearly labeled fallback path
 
-Current roadmap status:
+## What We Have Already Achieved
 
-- Stage `P0`: completed for the synthetic baseline
-- Phase `F1`: implemented
-- Phase `T1`: pending
-- Phase `T2`: pending
-- Phase `F2`: pending
-- Phase `F3`: pending
-- Phases `C1-C3`: pending
+### Completed Work
 
-Verified current baseline details:
-- active feature set = `cpu`, `memory`, `in_rate`, `out_rate`, `error_rate`
-- artifact directory used for the validated F1 baseline = `f1_baseline_v1`
-- current validated threshold from that baseline = `0.014308651676401496`
-- latest CSV replay baseline run evaluated `29850` windows and predicted `1821` anomalies
+#### Stage `P0`: Synthetic baseline readiness
 
-## Prerequisites
+What `P0` was for:
 
-Before this roadmap can be followed effectively, the project should have a minimum set of data, schema, and evaluation foundations in place.
+- verify the dataset is usable for interface-level anomaly work
+- audit sequential quality before derived-rate features
 
-### Data Prerequisites
+What we achieved:
 
-- stable `device_id` values across SNMP collection, training data, replay, and live scoring
-- reliable `interface` identifiers for the primary `per-interface` production path
-- timestamped sequential SNMP poll data with enough continuity to compute rates safely
-- interface metadata where available, including capacity or speed and interface state
-- at least one usable non-SNMP event source for later correlation work, such as syslog, traps, or interface state events
+- dataset inventory tooling exists
+- data quality audit tooling exists
+- baseline synthetic dataset slice was prepared
+- cumulative counters were corrected so default synthetic data no longer produces negative deltas
+- richer synthetic fields were added:
+  packet counters, discard counters, interface speed, interface status, anomaly metadata, counter reset flags
 
-### Pipeline Prerequisites
+Current evidence:
 
-- handling for counter resets, wraparound, polling gaps, and out-of-order records
-- ability to compute rates using actual elapsed poll time between observations
-- the same feature engineering behavior available in both offline dataset generation and Kafka live scoring
-- support for `analysis_scope` labeling so `per-interface` and `per-device` fallback records do not get mixed silently
-- versioned preprocessing artifacts so training and inference use the same scaler and transformations
+- outputs are saved under `snmp_anomaly_detection/outputs/`
+- dataset quality is auditable before training
 
-### Training And Evaluation Prerequisites
+#### Phase `F1`: Derived-rate feature baseline
 
-- a repeatable time-based train/validation/test split process
-- at least some known-normal or reviewable baseline periods for cleaner unsupervised training
-- a reproducible evaluation workflow that reports false positives, detection delay, and per-interface performance
-- baseline metrics saved before major feature or model changes so improvements can be measured honestly
+What `F1` was for:
 
-### Correlation Prerequisites
+- move from raw counter emphasis to rate-based signals
 
-- timestamps from SNMP and non-SNMP sources that are aligned well enough for time-window matching
-- a normalized event schema or a clear path to create one
-- enough event context to match by `device_id`, and by `interface` where available
+What we achieved:
 
-### Fallback Readiness
+- preprocessing derives:
+  `in_rate`, `out_rate`, `error_rate`
+- derived rates are computed per `device_id + interface`
+- elapsed poll time is used in the rate calculations
+- reset-aware logic is used to avoid false spikes
+- offline preprocessing, CSV replay, and Kafka live scoring use the same core rate logic
+- outputs now carry `interface` and `stream_id`
+- the active model trains on:
+  `cpu`, `memory`, `in_rate`, `out_rate`, `error_rate`
 
-- if some devices do not expose interface-level telemetry, the pipeline must support a labeled `per-device` fallback path
-- fallback records should use `analysis_scope = per_device`
-- fallback outputs should use `interface = null` or an equivalent explicit empty value
-- fallback training and thresholding should remain separate from the main `per-interface` production baseline
+Validated baseline produced by `F1`:
 
-### Minimum Practical Starting Point
+- artifact directory:
+  `f1_baseline_v1`
+- threshold:
+  `0.014308651676401496`
+- replay summary:
+  `29850` windows, `1821` predicted anomalies
 
-At minimum, the roadmap can begin productively when the project has:
-- SNMP data with `device_id`, timestamp, and enough counters to derive traffic and error rates
-- interface-level identifiers for the devices intended for the main production path
-- a reproducible offline training and replay workflow
-- one event source that can later be normalized for correlation
-- saved baseline evaluation results for comparison across phases
+### What Is Still Missing
 
-## Design Principles
+Even after `F1`, the project still has these gaps:
 
-The next version should follow these principles:
+- training logic is not yet upgraded to use the new `P1` time-based evaluation standard
+- preprocessing comparisons are not yet measured across scaler choices
+- richer interface health features are present in data but not yet active in the model
+- contextual rolling features are not yet added
+- correlation with non-SNMP events is not yet implemented
 
-- Keep SNMP anomaly scoring as the core detector first.
-- Improve features before replacing the model.
-- Prefer derived rates and utilization over raw cumulative counters.
-- Standardize the roadmap on `per-interface` analysis so feature engineering, training, and correlation stay aligned with production operations.
-- Add explanation through event correlation before attempting full multi-source joint training.
-- Preserve the current shared event-processing architecture where possible.
-- Roll out changes in phases so accuracy, complexity, and operational risk can be evaluated separately.
+## Roadmap Status
 
-## Primary Analysis Scope
+This is the simplest view of the roadmap:
 
-This roadmap adopts one explicit production-first scope decision:
-- primary anomaly scope = `per-interface`
-- `per-device` handling is fallback compatibility only for datasets that do not yet expose interface-level telemetry
+- `P0`: completed
+- `F1`: completed
+- `P1`: completed
+- `T1`: in progress
+- `T2`: in progress
+- `P2`: pending
+- `F2`: pending
+- `F3`: pending
+- `P3`: pending
+- `C1`: pending
+- `C2`: pending
+- `C3`: pending
 
-Why this matters:
-- rate features, utilization, and discards are most actionable at interface level
-- correlation output is easier to interpret when anomalies point to a concrete interface
-- production triage is faster when alerts identify the affected interface directly
-- training samples and thresholds should not mix interface-level and device-level semantics invisibly
+## What We Should Do Next
 
-Implementation note:
-- every dataset, feature schema, model artifact, and anomaly output should carry `analysis_scope = per_interface` by default
-- any temporary `per_device` fallback path should be labeled explicitly and kept outside the main production baseline
+The next best step is:
 
-## Fallback Strategy For Limited Visibility Devices
+- implement `T1`
+- then implement `T2`
+- then add `P1.1` comparison mode once the first `T1` candidate artifact exists
 
-Some production devices may not expose usable interface-level telemetry.
-The roadmap should still support them, but without weakening the main `per-interface` design.
+Why this is the right order:
 
-Fallback rule:
-- if interface-level counters and state are available, use `per-interface` analysis
-- if interface-level visibility is missing or incomplete, use a labeled `per-device` fallback path
+- `F1` already gave us a stable feature baseline
+- `P1` now gives us a repeatable evaluation foundation
+- `T1` should be the first training improvement measured against that foundation
 
-Fallback expectations:
-- fallback records must carry `analysis_scope = per_device`
-- fallback anomaly outputs should use `interface = null` or an equivalent explicit empty value
-- fallback training samples should be evaluated separately from the main `per-interface` production baseline
-- fallback thresholding should be tuned independently because device-level variability differs from interface-level variability
-- event correlation for fallback devices should match on `device_id` when no reliable interface key exists
+In short:
 
-Recommended fallback features:
-- `cpu`
-- `memory`
-- total `in_rate`
-- total `out_rate`
-- total `error_rate`
-- device-level health or status events
+- first strengthen evaluation
+- then compare preprocessing choices
+- then add artifact-to-artifact comparison support for repeatable experiment reviews
+- then add richer features
+- then add event correlation
 
-Operational goal:
-- keep production coverage for limited-visibility devices
-- avoid mixing weaker device-level semantics into the primary interface-first model
+## Phase Order At A Glance
 
-## What We Should Improve First
+The roadmap is organized into four kinds of work:
 
-Highest-value improvements:
-- derive better SNMP features
-- retrain on those features
-- tighten validation and thresholding
-- correlate detected anomalies with nearby events
+- prerequisite stages:
+  `P0`, `P1`, `P2`, `P3`
+- feature phases:
+  `F1`, `F2`, `F3`
+- training phases:
+  `T1`, `T2`, `T3`, `T4`
+- correlation phases:
+  `C1`, `C2`, `C3`
 
-Lower-priority improvements for later:
-- multi-source joint model training
-- dynamic per-device adaptive models
-- online retraining in stream
+Simple order:
 
-## Prerequisites By Work Stage
+1. prepare baseline data and checks
+2. improve features
+3. improve training and evaluation
+4. improve explanation by event correlation
 
-The prerequisites do not need to be completed all at once.
-They should be fulfilled in the same order as the roadmap work.
+## Prerequisites By Stage
 
-### Stage P0: Before Phase F1
+The prerequisite stages are not the same as feature phases.
+They are the preparation steps that make later phases safe and measurable.
 
-Required before derived-rate feature work starts:
-- verify stable `device_id`, `timestamp`, and `interface` availability for the main production path
-- classify devices into `per-interface` ready vs `per-device` fallback
-- audit polling continuity, missing rows, duplicate rows, out-of-order rows, and obvious counter reset behavior
-- confirm the raw dataset has enough counters to derive `in_rate`, `out_rate`, and `error_rate`
-- freeze one baseline dataset slice that will be reused for comparison later
+### Stage `P0`: Before `F1`
 
-Why now:
-- F1 depends directly on trustworthy sequential SNMP records and interface-level identifiers
+Goal:
 
-Expected output of this stage:
+- make sure the synthetic dataset is trustworthy enough for derived-rate work
+
+Prerequisites for `P0`:
+
+- stable `device_id`, `timestamp`, and `interface`
+- enough counters to derive rate features
+- enough continuity to inspect gaps, duplicates, and ordering problems
+
+Expected outputs:
+
 - dataset inventory
 - data quality audit
 - baseline dataset selection
 
 Current status:
-- completed for the richer synthetic dataset
-- dataset inventory and quality audit reports are saved under `snmp_anomaly_detection/outputs/`
-- cumulative counters were corrected so default synthetic data no longer produces negative deltas
-- the synthetic dataset now includes richer production-like fields such as packet counters, discard counters, interface speed, interface status, anomaly type, and counter reset flags
 
-### Stage P1: Before Phase T1 and T2
+- completed
 
-Required before retraining and preprocessing comparison work starts:
+What was achieved:
+
+- inventory and audit tooling were added
+- baseline synthetic slice was frozen for comparison
+- cumulative counter behavior was improved
+- richer interface-related fields were added to the synthetic dataset
+
+### Stage `P1`: Before `T1` and `T2`
+
+Goal:
+
+- make evaluation reproducible before we change training behavior or scaler choices
+
+Why this stage matters:
+
+- `T1` and `T2` depend on trustworthy measurement
+- without this stage, we cannot compare later changes honestly
+
+Prerequisites for `P1`:
+
 - define a repeatable time-based train/validation/test split
 - identify known-normal periods, suspicious periods, and maintenance windows where possible
-- define the baseline evaluation workflow and save the current baseline metrics
+- define the baseline evaluation workflow
+- save the current baseline metrics
 - confirm versioned artifact usage for scaler, training arrays, model, and metadata
 
-Why now:
-- T1 and T2 depend on stable evaluation and reproducible preprocessing behavior
+Expected outputs:
 
-Expected output of this stage:
-- time-split definition
+- written time-split definition
 - baseline metrics report
-- named artifact directory for the baseline run
+- named baseline artifact usage confirmation
 
-### Stage P2: Before Phase F2 and F3
+Current status:
 
-Required before richer interface-centric feature work starts:
-- confirm whether interface speed, capacity, packet counters, discard counters, and admin/oper status are available
-- document which devices can support full `per-interface` production features
-- document which devices require `per-device` fallback compatibility only
-- define the schema fields needed for interface-level feature rows and outputs
+- completed for the synthetic baseline
 
-Why now:
-- F2 and F3 should only be implemented after you know which interface metadata is actually present
+What we achieved in `P1`:
 
-Expected output of this stage:
+- versioned artifact directory exists:
+  `f1_baseline_v1`
+- repeatable time split was defined and saved
+- baseline metrics report was generated and saved
+- artifact usage for scaler, arrays, model, and metadata is now recorded in the report
+- replay outputs are now tied to a documented baseline evaluation workflow
+
+Current `P1` outputs:
+
+- time split file:
+  `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_time_split.json`
+- baseline metrics file:
+  `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_baseline_metrics.json`
+
+Current saved time split:
+
+- train:
+  `2025-01-01 00:00:00` to `2025-01-05 20:35:00`
+- validation:
+  `2025-01-05 20:40:00` to `2025-01-06 21:35:00`
+- test:
+  `2025-01-06 21:40:00` to `2025-01-07 22:35:00`
+
+Current saved baseline metrics summary:
+
+- windows evaluated:
+  `29850`
+- actual anomaly windows:
+  `277`
+- predicted anomaly windows:
+  `1821`
+- precision:
+  `0.0923`
+- recall:
+  `0.6065`
+- false positive rate:
+  `0.0559`
+
+Follow-on improvement kept in todo for `P1`:
+
+- add `P1.1` comparison mode for artifact-to-artifact evaluation
+- example goal:
+  compare `f1_baseline_v1` vs `t1_candidate_v1`
+- reason:
+  current `P1` reports one artifact well, but does not yet measure improvement deltas automatically
+- when to implement:
+  after the first `T1` candidate artifact exists, so comparison work is driven by a real experiment
+
+Expected future `P1.1` outputs:
+
+- metric delta report between baseline and candidate artifacts
+- split-wise comparison for train, validation, and test
+- per-interface regression and improvement highlights
+
+### Stage `P2`: Before `F2` and `F3`
+
+Goal:
+
+- confirm which richer interface-centric features are truly available and safe to use
+
+Why this stage matters:
+
+- `F2` and `F3` should be based on confirmed data availability, not assumptions
+
+Prerequisites for `P2`:
+
+- confirm availability of interface speed or capacity
+- confirm availability of packet counters
+- confirm availability of discard counters
+- confirm availability of admin and oper status
+- document which devices support full `per-interface` feature coverage
+- document which devices need `per-device` fallback
+- define the schema fields needed for extended interface-level feature rows and outputs
+
+Expected outputs:
+
 - interface capability matrix
-- schema note for extended SNMP feature rows
+- extended feature schema note
 
-### Stage P3: Before Phase C1, C2, and C3
+Current status:
 
-Required before event correlation work starts:
-- choose at least one non-SNMP event source to normalize first
-- verify timestamp alignment quality between SNMP and the selected event source
-- define the normalized event schema fields needed for correlation
-- confirm whether interface identifiers are available in the selected event source
+- in progress
 
-Why now:
-- correlation quality depends more on timestamp and key alignment than on model complexity
+What is now implemented:
 
-Expected output of this stage:
+- preprocessing supports configurable scaler selection
+- optional `log1p` preprocessing can be applied to selected heavy-tailed features
+- preprocessing choice is saved into artifact metadata for repeatable experiments
+
+Recommended first comparisons:
+
+- `minmax`
+- `standard`
+- `robust`
+- `log1p + standard`
+- `log1p + robust`
+
+What is already in place to help `P2`:
+
+- the synthetic dataset already includes packet counters
+- the synthetic dataset already includes discard counters
+- the synthetic dataset already includes interface speed
+- the synthetic dataset already includes interface state fields
+
+### Stage `P3`: Before `C1`, `C2`, and `C3`
+
+Goal:
+
+- prepare the first usable non-SNMP event source for anomaly correlation
+
+Why this stage matters:
+
+- correlation quality depends heavily on timestamp alignment and matching keys
+
+Prerequisites for `P3`:
+
+- choose the first non-SNMP event source
+- verify timestamp alignment quality between SNMP and that source
+- define normalized event schema fields
+- confirm whether interface identifiers are available in that event source
+
+Expected outputs:
+
 - first event source selection
 - normalized event schema draft
 - timestamp alignment notes
 
-## Feature Engineering Roadmap
+Current status:
 
-### Phase F1: Replace Raw Counter Emphasis With Derived Rates
+- pending
 
-#### Objective
+## Feature Roadmap
 
-Convert raw SNMP counters into more meaningful rate-based signals.
+### Phase `F1`: Derived rates
 
-#### Why
+Goal:
 
-Raw counters and absolute values are often weaker than change-over-time features.
+- convert cumulative counters into rate-based behavior signals
 
-Example:
-- raw `in_octets` mostly reflects accumulated volume or scale
-- `in_rate` better reflects traffic behavior between polls
-
-#### Target Features
+Target features:
 
 - `in_rate`
 - `out_rate`
@@ -294,43 +414,36 @@ Example:
 - optional `cpu_delta`
 - optional `memory_delta`
 
-#### Notes
+Acceptance criteria:
 
-- Compute deltas per `device_id` and `interface`.
-- Convert deltas into rates using elapsed poll time, not just successive counter difference.
-- Guard against poll jitter so delayed polls do not look like traffic spikes.
-- Handle counter resets and wraparound safely.
-- Drop or repair negative deltas caused by resets, restarts, or bad ordering.
+- rate features are computed correctly from sequential data
+- rate features stay keyed by `device_id + interface`
+- elapsed seconds are used in normalization
+- counter resets do not create false spikes
+- polling gaps and irregular intervals are handled explicitly
+- CSV replay and Kafka paths carry the same feature logic
 
-#### Acceptance Criteria
+Current status:
 
-- Derived rate features are created correctly from sequential SNMP data.
-- Rate features are generated at interface granularity and remain keyed by `device_id` plus `interface`.
-- Rate features are normalized by elapsed seconds between polls.
-- Counter resets do not produce false spikes.
-- Polling gaps and irregular intervals are handled explicitly and tested.
-- Existing CSV replay and Kafka paths can carry the new feature set.
+- completed
 
-#### Current Status
+What we achieved:
 
-- implemented
-- preprocessing now derives `in_rate`, `out_rate`, and `error_rate` from cumulative counters
-- training now uses `cpu`, `memory`, `in_rate`, `out_rate`, and `error_rate`
-- windowing and replay outputs now carry `interface` and `stream_id`
-- online replay and Kafka paths use the same reset-aware elapsed-time rate logic
+- `in_rate`, `out_rate`, and `error_rate` are implemented
+- the active training baseline uses the new rate features
+- replay and live scoring both use reset-aware elapsed-time logic
 
-#### Notes From Implementation
+Important note:
 
-- richer dataset fields for packet counters, discard counters, interface speed, and interface state are now present in synthetic data and ready for `F2`
-- the active model still focuses on the F1 feature set only
+- richer fields needed for `F2` already exist in the dataset, but they are not active model features yet
 
-### Phase F2: Add Interface Capacity and Health Features
+### Phase `F2`: Interface capacity and health features
 
-#### Objective
+Goal:
 
-Capture whether traffic is high relative to link capacity and whether the interface itself is unhealthy.
+- tell the difference between busy links, congested links, failing links, and shut links
 
-#### Target Features
+Target features:
 
 - `utilization_in_pct`
 - `utilization_out_pct`
@@ -342,27 +455,32 @@ Capture whether traffic is high relative to link capacity and whether the interf
 - `interface_oper_status`
 - `interface_admin_status`
 
-#### Why
+Why this phase matters:
 
-These features improve distinction between:
-- busy but healthy links
-- congested links
-- failing links
-- administratively shut links
+- raw rate alone cannot explain whether a link is healthy relative to capacity
+- discards and state changes provide stronger operational meaning
 
-#### Acceptance Criteria
+Acceptance criteria:
 
-- Utilization is calculated using interface speed rather than raw traffic alone.
-- Discards and packet features are available in both offline and live paths.
-- Interface state is preserved as a first-class production feature for anomaly explanation and optional training use.
+- utilization is calculated using interface speed
+- discard and packet features work in offline and live paths
+- interface state is preserved as a first-class feature for explanation and optional training use
 
-### Phase F3: Add Contextual Rolling Features
+Current status:
 
-#### Objective
+- pending
 
-Measure deviation from each interface's recent history, not only absolute values.
+Prerequisite before starting:
 
-#### Target Features
+- complete `P2`
+
+### Phase `F3`: Contextual rolling features
+
+Goal:
+
+- measure whether current behavior is unusual for that specific interface
+
+Target features:
 
 - rolling mean
 - rolling standard deviation
@@ -370,123 +488,163 @@ Measure deviation from each interface's recent history, not only absolute values
 - short-term trend slope
 - burst indicator
 
-#### Why
+Why this phase matters:
 
-Many anomalies are interface-relative:
-- 40% utilization may be normal on one interface
-- the same traffic level may be normal on one uplink and abnormal on another
+- a value can be normal for one interface and abnormal for another
 
-#### Acceptance Criteria
+Acceptance criteria:
 
-- Features can be computed online from recent windows without future leakage.
-- Interface-relative deviation features improve validation metrics against the F2/T2 baseline on the same time split.
+- features can be computed online without future leakage
+- they improve validation results against the same baseline used for `F2` and `T2`
+
+Current status:
+
+- pending
+
+Prerequisite before starting:
+
+- complete `P2`
 
 ## Training Roadmap
 
-### Phase T1: Clean Training Data and Time-Based Evaluation
+### Phase `T1`: Clean training data and time-based evaluation
 
-#### Objective
+Goal:
 
-Train the model on more realistic normal behavior and evaluate it in a production-like way.
+- make training and evaluation closer to real operational conditions
 
-#### Improvements
+Planned improvements:
 
-- train only on known-normal periods where possible
-- exclude maintenance windows and known incidents
-- split train/test by time rather than random order
-- track precision, recall, and false positive rate
-- report metrics by `device_id` and `interface`
+- train on known-normal periods where possible
+- exclude suspicious periods and maintenance windows where possible
+- split train and test by time instead of only by row order
+- report metrics in a repeatable way
+- report false positives by `device_id` and `interface`
 
-#### Why
+Why this phase matters:
 
-If anomalous periods leak into the normal training set, the model learns them as acceptable behavior.
+- if anomalous behavior leaks into training, the model learns it as normal
+- if evaluation is weak, later improvements cannot be trusted
 
-#### Acceptance Criteria
+Acceptance criteria:
 
-- Training and testing use clear time boundaries.
-- Metrics are reported in addition to saved model artifacts.
-- False positives are reviewed per interface, with device-level rollups as secondary reporting.
-- A documented baseline run exists so later phases can be compared against the same evaluation slice.
+- training and testing use clear time boundaries
+- metrics are reported and saved
+- false positives are reviewed per interface
+- a documented baseline run exists for future comparison
 
-### Phase T2: Improve Scaling and Transformations
+Current status:
 
-#### Objective
+- in progress
 
-Make preprocessing more stable for real telemetry distributions.
+What is now implemented:
 
-#### Candidates
+- preprocessing now builds a repeatable time split before sequence generation
+- the scaler is fit on train-period normal data only
+- saved `X_train` and `X_test` arrays now follow explicit time boundaries instead of row-order slicing
+- preprocessing metadata is saved with split boundaries and row counts for the selected artifact
 
-- compare `MinMaxScaler` with `StandardScaler`
-- compare `MinMaxScaler` with `RobustScaler`
-- apply `log1p` on heavy-tailed traffic features before scaling
+What still remains:
 
-#### Why
+- use real known-normal and maintenance labels when available instead of synthetic anomaly-only filtering
+- review the first `T1` candidate artifact against `f1_baseline_v1`
+- add `P1.1` delta comparison once the first `T1` artifact exists
 
-Traffic rates and error bursts are often skewed and can dominate learning if scaling is too brittle.
+Prerequisite before starting:
 
-#### Acceptance Criteria
+- completed
+
+### Phase `T2`: Improve scaling and transformations
+
+Goal:
+
+- make preprocessing more stable for real traffic distributions
+
+Candidate comparisons:
+
+- `MinMaxScaler` vs `StandardScaler`
+- `MinMaxScaler` vs `RobustScaler`
+- `log1p` on heavy-tailed traffic features
+
+Why this phase matters:
+
+- traffic and error bursts are often skewed
+- poor scaling can hide useful variation or overreact to outliers
+
+Acceptance criteria:
 
 - scaler choice is documented and justified by validation results
 - feature distributions are checked before training
-- large outliers do not collapse the useful range of normal samples
-- the saved preprocessing artifact is versioned and reused consistently by offline and live scoring
+- outliers do not collapse the useful range of normal samples
+- saved preprocessing artifacts are versioned and reused consistently
 
-### Phase T3: Tune Windowing and Threshold Strategy
+Current status:
 
-#### Objective
+- pending
 
-Find a more reliable detection setup without overcomplicating the model.
+Prerequisite before starting:
 
-#### Things to Tune
+- completed
+
+### Phase `T3`: Tune windowing and threshold strategy
+
+Goal:
+
+- improve detection reliability without unnecessary complexity
+
+Things to tune:
 
 - `sequence_length`
 - threshold rule
-- per-interface vs global threshold
+- global threshold vs per-interface threshold
 - percentile threshold vs `mean + K * std`
 
-#### Why
+Acceptance criteria:
 
-Some anomalies are short spikes, others are slow drifts. One window length and one threshold may not fit all behaviors.
-
-#### Acceptance Criteria
-
-- threshold method is selected from measured validation results
+- threshold method is selected from measured results
 - detection delay and false positives are reported
-- chosen sequence length matches poll interval and operational need
-- the final threshold strategy is documented with exact selection logic so inference and replay use the same rule
+- chosen sequence length fits the poll interval and operational need
+- final threshold logic is documented clearly for inference and replay
 
-### Phase T4: Compare Baseline Models Before Major Complexity
+Current status:
 
-#### Objective
+- pending
 
-Validate whether the current LSTM autoencoder remains the best practical choice.
+### Phase `T4`: Compare model baselines
 
-#### Candidate Comparisons
+Goal:
+
+- confirm whether the LSTM autoencoder is still the best practical choice
+
+Candidate comparisons:
 
 - current LSTM autoencoder
 - GRU autoencoder
-- 1D CNN or temporal convolution autoencoder
-- simpler baseline on engineered summary features, such as Isolation Forest
+- temporal convolution or 1D CNN autoencoder
+- simple baseline such as Isolation Forest on engineered summary features
 
-#### Why
+Why this phase matters:
 
-A simpler model with stronger features can outperform a more complex model with weak features.
+- stronger features plus a simpler model may be better operationally
 
-#### Acceptance Criteria
+Acceptance criteria:
 
-- comparisons are run on the same feature set and time split
-- one baseline is selected for operational simplicity and accuracy
-- the selected model is justified with both quality metrics and operational cost considerations
+- comparisons use the same feature set and time split
+- one baseline is selected using both quality and operational simplicity
 
-## Event Correlation Roadmap
+Current status:
 
-### Phase C1: Add a Normalized Event Schema
+- pending
 
-#### Objective
+## Correlation Roadmap
 
-Standardize non-SNMP evidence into one event format.
+### Phase `C1`: Normalize one non-SNMP event source
 
-#### Candidate Sources
+Goal:
+
+- standardize external evidence into one event format
+
+Candidate sources:
 
 - syslog
 - SNMP traps
@@ -494,7 +652,7 @@ Standardize non-SNMP evidence into one event format.
 - NetFlow summaries
 - sFlow summaries
 
-#### Common Fields
+Common fields:
 
 - `timestamp`
 - `device_id`
@@ -506,183 +664,89 @@ Standardize non-SNMP evidence into one event format.
 - `message`
 - `extra`
 
-#### Why
+Acceptance criteria:
 
-A shared schema makes correlation simple even when raw sources are very different.
-
-#### Acceptance Criteria
-
-- at least one non-SNMP source can be normalized into the shared event format
+- at least one source can be normalized into the shared schema
 - malformed events are rejected safely
-- the normalized schema is versioned so downstream correlation logic can evolve safely
+- schema versioning is defined
 
-### Phase C2: Correlate Detected Anomalies With Nearby Events
+Current status:
 
-#### Objective
+- pending
 
-Attach likely supporting evidence to each detected anomaly window.
+Prerequisite before starting:
 
-#### Input
+- complete `P3`
 
-SNMP anomaly result with:
-- `device_id`
-- `interface`
-- `window_start`
-- `window_end`
-- `top_error_feature`
-- `predicted_anomaly`
+### Phase `C2`: Correlate anomalies with nearby events
 
-#### Correlation Rule
+Goal:
 
-For each anomaly:
-- find events from the same `device_id`
-- require the same `interface` when interface context exists in both anomaly and event records
-- search within a configurable time buffer around the anomaly window
-- rank matched events by proximity and relevance
+- enrich anomaly output with likely nearby operational context
 
-#### Example Time Buffer
+Planned behavior:
 
-- from `window_start - 5 minutes`
-- to `window_end + 5 minutes`
+- match anomalies with nearby normalized events
+- match by time window
+- match by `device_id`
+- match by `interface` when available
 
-#### Example Relevance Hints
+Acceptance criteria:
 
-- traffic anomalies prefer flow summaries, link events, trap evidence
-- CPU or memory anomalies prefer syslog and control-plane events
-- error or discard anomalies prefer interface events and fault traps
+- anomaly outputs can include correlated events
+- the correlation window is documented
+- unmatched anomalies are still handled safely
 
-#### Acceptance Criteria
+Current status:
 
-- anomaly results can include a supporting evidence list
-- evidence ranking is explainable and deterministic
-- correlation behavior is evaluated on a small backtest set or reviewed incident sample using a metric such as precision at top-k evidence items
+- pending
 
-### Phase C3: Produce Enriched Anomaly Output
+Prerequisite before starting:
 
-#### Objective
+- complete `P3`
 
-Move from bare anomaly scores to operator-friendly incident hints.
+### Phase `C3`: Add basic explanation output
 
-#### Desired Output Shape
+Goal:
 
-- anomaly metadata
-- schema version
-- analysis scope
-- top abnormal SNMP features
-- correlated events
-- likely cause summary
-- evidence confidence or correlation score
+- move from "abnormal window" toward "likely explanation"
 
-#### Example Outcome
+Planned behavior:
 
-"Traffic anomaly detected on device `R1`; likely related to uplink state change based on `linkDown` trap and interface-down syslog."
+- combine top error feature with nearby correlated events
+- produce a short explanation summary
+- support interface-level triage first
 
-#### Acceptance Criteria
+Acceptance criteria:
 
-- enriched results are saved in a stable schema
-- operators can understand why the anomaly likely happened without manual log hunting
-- enriched outputs are versioned so replay, live scoring, and downstream consumers stay aligned
+- anomaly outputs include a basic explanation field
+- explanation logic is deterministic and easy to inspect
 
-## Important Things We Should Not Forget
+Current status:
 
-These are easy to miss but materially affect accuracy and trustworthiness:
+- pending
 
-- Counter resets:
-  raw counters can restart after device reboot or interface reset.
+Prerequisite before starting:
 
-- Polling gaps:
-  missing data must be handled explicitly or rates become misleading.
+- complete `P3`
 
-- Out-of-order events:
-  both SNMP and external event streams may arrive late or out of order.
+## Minimum Practical Starting Point
 
-- Time synchronization:
-  event correlation is weak if source timestamps are not aligned.
+The roadmap can move productively when we have:
 
-- Poll interval variability:
-  rates should use actual elapsed time because fixed-interval assumptions break under jitter or delayed polling.
+- SNMP data with `device_id`, `timestamp`, and enough counters to derive traffic and error rates
+- interface-level identifiers for the main production path
+- a reproducible offline training and replay workflow
+- one event source that can later be normalized for correlation
+- saved baseline evaluation results for comparison
 
-- Interface-level scope:
-  this roadmap assumes production anomaly detection is interface-first, with device-level views used mainly for aggregation and fallback compatibility.
+## Working Rule For Future Updates
 
-- Device role differences:
-  routers, switches, firewalls, and servers may need separate baselines.
+Whenever a phase changes state, update this document in four places:
 
-- Maintenance suppression:
-  planned changes should not poison training data or alert volume.
+- `Roadmap Status`
+- the relevant stage or phase section
+- `What We Have Already Achieved`
+- `What We Should Do Next`
 
-- Seasonality:
-  business-hour traffic and overnight traffic may require different baselines.
-
-- Label quality:
-  synthetic labels are fine for pipeline testing but not enough for production confidence.
-
-- Explainability:
-  operators will trust the system more if results include evidence, not just a score.
-
-## Recommended Phase Order
-
-Recommended implementation sequence:
-
-1. Phase F1
-2. Phase T1
-3. Phase T2
-4. Phase F2
-5. Phase T3
-6. Phase C1
-7. Phase C2
-8. Phase C3
-9. Phase F3
-10. Phase T4
-
-This order keeps the highest-value improvements early:
-- stronger SNMP features first
-- cleaner training second
-- explanation and correlation third
-
-## Scope Boundaries
-
-Included in this roadmap:
-- stronger SNMP features
-- improved offline training workflow
-- validation and threshold improvements
-- post-detection event correlation
-- enriched anomaly outputs
-
-Not included in the first implementation:
-- online retraining in Kafka live mode
-- full multi-source joint model training
-- dynamic topic orchestration
-- long-term incident management workflows
-
-## Suggested Deliverables By Phase
-
-- Phase F1:
-  updated feature engineering module, derived-rate dataset support, and poll-interval-aware rate tests
-- Phase T1:
-  time-split evaluation notes, training metrics, and a documented baseline comparison run
-- Phase F2:
-  extended schema for interface health and utilization
-- Phase C1:
-  normalized and versioned non-SNMP event schema
-- Phase C2:
-  anomaly-to-event correlation module plus reviewed correlation backtest examples
-- Phase C3:
-  versioned enriched anomaly result export format
-
-## Success Criteria
-
-This roadmap is successful when:
-
-- anomaly detection uses stronger SNMP-derived features than raw counters alone at interface granularity
-- training and evaluation reflect realistic operating conditions
-- false positives are reduced compared with the current baseline
-- anomaly results explain not only what was abnormal, but also what likely caused it
-- the system remains understandable enough to extend phase by phase
-
-## Next Step
-
-The best next implementation step is:
-- Phase F1: derive `in_rate`, `out_rate`, and `error_rate`
-
-That gives the project a stronger data foundation before larger model or correlation changes.
+This will keep the roadmap easy to follow for both implementation and review.

@@ -73,6 +73,18 @@ class ProjectPaths:
         return self.artifact_dir / "model_metadata.json"
 
     @property
+    def preprocessing_metadata_file(self) -> Path:
+        return self.artifact_dir / "preprocessing_metadata.json"
+
+    @property
+    def p1_time_split_file(self) -> Path:
+        return self.outputs_dir / f"{self.artifact_dir.name}_p1_time_split.json"
+
+    @property
+    def p1_baseline_metrics_file(self) -> Path:
+        return self.outputs_dir / f"{self.artifact_dir.name}_p1_baseline_metrics.json"
+
+    @property
     def legacy_scaler_file(self) -> Path:
         return self.utils_dir / "scaler.pkl"
 
@@ -124,6 +136,8 @@ class FeatureEngineeringConfig:
     train_split: float = 0.8
     normal_label: int = 0
     save_scaler: bool = True
+    scaler_name: str = "minmax"
+    log1p_features: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,6 +148,14 @@ class TrainingConfig:
     hidden_size: int = 64
     latent_size: int = 32
     threshold_std_multiplier: float = 3.0
+
+
+@dataclass(frozen=True)
+class EvaluationConfig:
+    train_fraction: float = 0.70
+    validation_fraction: float = 0.15
+    test_fraction: float = 0.15
+    report_top_n: int = 10
 
 
 @dataclass(frozen=True)

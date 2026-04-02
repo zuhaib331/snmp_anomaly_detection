@@ -57,6 +57,7 @@ def save_training_artifacts(
     input_size: int,
     threshold: float,
     train_loss_history: list[float],
+    num_training_sequences: int,
 ) -> None:
     torch.save(model.state_dict(), paths.model_file)
     metadata = {
@@ -71,6 +72,9 @@ def save_training_artifacts(
         "threshold": threshold,
         "feature_config": asdict(feature_config),
         "training_config": asdict(config),
+        "preprocessing_metadata_file": str(paths.preprocessing_metadata_file),
+        "preprocessing_metadata_exists": paths.preprocessing_metadata_file.exists(),
+        "num_training_sequences": num_training_sequences,
         "train_loss_history": train_loss_history,
     }
     with open(paths.model_metadata_file, "w", encoding="utf-8") as file:
@@ -136,6 +140,7 @@ def train_model(
         input_size=input_size,
         threshold=threshold,
         train_loss_history=train_loss_history,
+        num_training_sequences=int(len(x_train)),
     )
 
     summary = {

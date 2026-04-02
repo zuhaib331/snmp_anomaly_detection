@@ -83,6 +83,10 @@ def scale_feature_frame(
     config: FeatureEngineeringConfig,
 ) -> pd.DataFrame:
     feature_columns = list(config.feature_columns)
+    if hasattr(scaler, "transform") and hasattr(scaler, "feature_columns"):
+        transformed = scaler.transform(dataframe)
+        return transformed
+
     scaled = dataframe.copy()
     scaled[feature_columns] = scaler.transform(scaled[feature_columns])
     return scaled

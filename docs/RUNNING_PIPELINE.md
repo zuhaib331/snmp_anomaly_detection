@@ -42,6 +42,7 @@ Available steps:
 python3 main.py generate-data
 python3 main.py preprocess
 python3 main.py train
+python3 main.py evaluate-baseline
 python3 main.py detect
 python3 main.py detect-csv
 python3 main.py detect-kafka-dry
@@ -136,6 +137,7 @@ python3 main.py generate-data
 python3 main.py preprocess --artifact-dir-name f1_baseline_v1
 python3 main.py train --artifact-dir-name f1_baseline_v1
 python3 main.py detect --artifact-dir-name f1_baseline_v1
+python3 main.py evaluate-baseline --artifact-dir-name f1_baseline_v1
 ```
 
 This does the following:
@@ -143,6 +145,7 @@ This does the following:
 2. derives rate features and saves arrays plus scaler
 3. trains the LSTM autoencoder on the `F1` feature set
 4. runs anomaly detection using the same validated artifact set
+5. saves the `P1` time split and baseline metrics report
 
 ## 7. Run Each Step Separately
 
@@ -189,14 +192,26 @@ Outputs:
 python3 main.py preprocess --artifact-dir-name f1_baseline_v1
 ```
 
+Optional `T2` preprocessing examples:
+
+```bash
+python3 main.py preprocess --artifact-dir-name t2_standard_v1 --scaler-name standard
+python3 main.py preprocess --artifact-dir-name t2_robust_v1 --scaler-name robust
+python3 main.py preprocess --artifact-dir-name t2_log1p_standard_v1 --scaler-name standard --log1p-features in_rate out_rate error_rate
+```
+
 What this step does:
 - loads the dataset
 - derives `in_rate`, `out_rate`, and `error_rate`
-- filters normal rows for training
+- builds a repeatable time-based train, validation, and test split
+- filters normal rows for training and test artifacts
 - skips invalid warm-up and reset rows
-- scales the active feature columns
-- creates sequence windows per `device_id + interface`
-- saves train/test arrays and scaler into the selected artifact directory
+- fits the scaler on train-period normal rows only
+- can use `minmax`, `standard`, or `robust` scaling
+- can optionally apply `log1p` to selected heavy-tailed features before scaling
+- applies the saved scaler to both train and test periods
+- creates sequence windows per `device_id + interface` inside each split boundary
+- saves train/test arrays, scaler, and preprocessing metadata into the selected artifact directory
 
 Outputs:
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/X_train.npy`
@@ -204,6 +219,7 @@ Outputs:
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/y_train.npy`
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/y_test.npy`
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/scaler.pkl`
+- `snmp_anomaly_detection/artifacts/f1_baseline_v1/preprocessing_metadata.json`
 
 ### D. Train the `F1` model
 
@@ -254,7 +270,45 @@ Current validated result shape includes:
 - `feature_error_out_rate`
 - `feature_error_error_rate`
 
-### F. Run Kafka dry ingestion
+### F. Run `P1` baseline evaluation
+
+```bash
+python3 main.py evaluate-baseline --artifact-dir-name f1_baseline_v1
+```
+
+What this step does:
+- replays the dataset using the selected artifact set
+- defines a repeatable time-based split for the current dataset
+- computes baseline window-level metrics from replay output
+- saves per-split and per-interface reporting artifacts for future comparison
+
+Outputs:
+- `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_time_split.json`
+- `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_baseline_metrics.json`
+
+Current saved `P1` split for `f1_baseline_v1`:
+- train:
+  `2025-01-01 00:00:00` to `2025-01-05 20:35:00`
+- validation:
+  `2025-01-05 20:40:00` to `2025-01-06 21:35:00`
+- test:
+  `2025-01-06 21:40:00` to `2025-01-07 22:35:00`
+
+Current saved `P1` summary for `f1_baseline_v1`:
+- windows:
+  `29850`
+- actual anomaly windows:
+  `277`
+- predicted anomaly windows:
+  `1821`
+- precision:
+  `0.0923`
+- recall:
+  `0.6065`
+- false positive rate:
+  `0.0559`
+
+### G. Run Kafka dry ingestion
 
 ```bash
 python3 main.py detect-kafka-dry
@@ -266,7 +320,7 @@ Notes:
 - does not perform anomaly scoring
 - stop with `Ctrl+C`
 
-### G. Publish Kafka test data
+### H. Publish Kafka test data
 
 ```bash
 python3 main.py produce-kafka-test-data
@@ -278,7 +332,7 @@ Notes:
 - the live synthetic Kafka producer now also includes `interface`
 - payloads use cumulative counters, matching the `F1` online-rate logic better than before
 
-### H. Run Kafka live detection
+### I. Run Kafka live detection
 
 ```bash
 python3 main.py detect-kafka --artifact-dir-name f1_baseline_v1
@@ -378,6 +432,7 @@ python3 -m snmp_anomaly_detection.data.data_quality_audit --output-file snmp_ano
 python3 main.py preprocess --artifact-dir-name f1_baseline_v1
 python3 main.py train --artifact-dir-name f1_baseline_v1
 python3 main.py detect --artifact-dir-name f1_baseline_v1
+python3 main.py evaluate-baseline --artifact-dir-name f1_baseline_v1
 ```
 
 If detection completes successfully, check:
@@ -385,3 +440,5 @@ If detection completes successfully, check:
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/`
 - `snmp_anomaly_detection/outputs/anomaly_results.csv`
 - `snmp_anomaly_detection/outputs/anomaly_windows.json`
+- `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_time_split.json`
+- `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_baseline_metrics.json`
