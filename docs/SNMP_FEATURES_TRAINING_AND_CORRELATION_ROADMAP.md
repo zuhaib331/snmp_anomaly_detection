@@ -26,9 +26,11 @@ Current project status in plain language:
 - `P0` is completed
 - `F1` is completed
 - `P1` is completed for the synthetic baseline
-- `T1` is in progress
+- `P1.1` is completed for the first synthetic candidate comparison set
+- `T1` first candidate has been reviewed against the baseline
+- `T2` first scaler and transformation comparisons have been generated
 - the validated artifact set is `f1_baseline_v1`
-- the next recommended work is `T1`, then `T2`
+- the next recommended work is `T3` threshold and windowing experiments
 
 Current validated baseline:
 
@@ -133,12 +135,26 @@ Validated baseline produced by `F1`:
 - replay summary:
   `29850` windows, `1821` predicted anomalies
 
+#### Stage `P1.1`: Artifact comparison reporting
+
+What `P1.1` was for:
+
+- compare candidate artifacts against the validated baseline using saved `P1` reports
+- make improvement or regression review repeatable
+
+What we achieved:
+
+- added `compare-artifacts` as a pipeline step
+- generated a comparison report for `t1_candidate_v1` and the first T2 candidate set
+- confirmed that none of the first candidates should replace `f1_baseline_v1`
+- surfaced and resolved metadata consistency warnings for T2 scaler and `log1p` tracking
+
 ### What Is Still Missing
 
 Even after `F1`, the project still has these gaps:
 
-- training logic is not yet upgraded to use the new `P1` time-based evaluation standard
-- preprocessing comparisons are not yet measured across scaler choices
+- real known-normal and maintenance labels are not yet available for training exclusion
+- richer threshold and windowing experiments are not yet implemented
 - richer interface health features are present in data but not yet active in the model
 - contextual rolling features are not yet added
 - correlation with non-SNMP events is not yet implemented
@@ -150,9 +166,10 @@ This is the simplest view of the roadmap:
 - `P0`: completed
 - `F1`: completed
 - `P1`: completed
-- `T1`: in progress
-- `T2`: in progress
-- `P2`: pending
+- `P1.1`: completed
+- `T1`: first synthetic candidate reviewed; real known-normal/maintenance label support still pending
+- `T2`: first comparison completed; metadata propagation fixed
+- `P2`: in progress
 - `F2`: pending
 - `F3`: pending
 - `P3`: pending
@@ -164,21 +181,23 @@ This is the simplest view of the roadmap:
 
 The next best step is:
 
-- implement `T1`
-- then implement `T2`
-- then add `P1.1` comparison mode once the first `T1` candidate artifact exists
+- move to `T3` threshold and windowing experiments against `f1_baseline_v1`
+- then complete `P2` before starting `F2` and `F3`
 
 Why this is the right order:
 
 - `F1` already gave us a stable feature baseline
-- `P1` now gives us a repeatable evaluation foundation
-- `T1` should be the first training improvement measured against that foundation
+- `P1` and `P1.1` now give us a repeatable evaluation and comparison foundation
+- the first `T1` and `T2` candidates did not beat `f1_baseline_v1`
+- T2 metadata cleanup is complete, so future scaler comparisons can be tracked consistently
+- `T3` can directly target the current false-positive/recall tradeoff before we add more features
 
 In short:
 
 - first strengthen evaluation
 - then compare preprocessing choices
 - then add artifact-to-artifact comparison support for repeatable experiment reviews
+- then tune threshold and windowing
 - then add richer features
 - then add event correlation
 
@@ -305,21 +324,21 @@ Current saved baseline metrics summary:
 - false positive rate:
   `0.0559`
 
-Follow-on improvement kept in todo for `P1`:
+Follow-on improvement completed after `P1`:
 
-- add `P1.1` comparison mode for artifact-to-artifact evaluation
-- example goal:
-  compare `f1_baseline_v1` vs `t1_candidate_v1`
-- reason:
-  current `P1` reports one artifact well, but does not yet measure improvement deltas automatically
-- when to implement:
-  after the first `T1` candidate artifact exists, so comparison work is driven by a real experiment
+- `P1.1` comparison mode was added for artifact-to-artifact evaluation
+- it compares `f1_baseline_v1` against candidate artifacts using saved `P1` metrics reports
+- it reports overall metric deltas, split-wise deltas, and saved top-interface false-positive highlights
+- it also flags artifact metadata consistency issues between model metadata and preprocessing metadata
 
-Expected future `P1.1` outputs:
+Current `P1.1` output:
 
-- metric delta report between baseline and candidate artifacts
-- split-wise comparison for train, validation, and test
-- per-interface regression and improvement highlights
+- comparison file:
+  `snmp_anomaly_detection/outputs/f1_baseline_v1_vs_5_candidates_p1_1_comparison.json`
+- command:
+  `python3 main.py compare-artifacts --baseline-artifact-dir-name f1_baseline_v1 --candidate-artifact-dir-name t1_candidate_v1 --candidate-artifact-dir-name t2_standard_v1 --candidate-artifact-dir-name t2_robust_v1 --candidate-artifact-dir-name t2_log1p_standard_v1 --candidate-artifact-dir-name t2_log1p_robust_v1`
+- current result:
+  all compared candidates recommend `keep_baseline`
 
 ### Stage `P2`: Before `F2` and `F3`
 
@@ -535,7 +554,7 @@ Acceptance criteria:
 
 Current status:
 
-- in progress
+- first synthetic candidate reviewed; still in progress for real known-normal and maintenance labeling
 
 What is now implemented:
 
@@ -543,12 +562,24 @@ What is now implemented:
 - the scaler is fit on train-period normal data only
 - saved `X_train` and `X_test` arrays now follow explicit time boundaries instead of row-order slicing
 - preprocessing metadata is saved with split boundaries and row counts for the selected artifact
+- `t1_candidate_v1` exists and has been compared against `f1_baseline_v1` using `P1.1`
+
+Current `T1` comparison result:
+
+- `t1_candidate_v1` did not beat `f1_baseline_v1`
+- overall precision delta:
+  `-0.0027`
+- overall recall delta:
+  `-0.0036`
+- overall false positive rate delta:
+  `+0.0015`
+- current recommendation:
+  keep `f1_baseline_v1` as the validated baseline
 
 What still remains:
 
 - use real known-normal and maintenance labels when available instead of synthetic anomaly-only filtering
-- review the first `T1` candidate artifact against `f1_baseline_v1`
-- add `P1.1` delta comparison once the first `T1` artifact exists
+- rerun candidate training when richer operational labels become available
 
 Prerequisite before starting:
 
@@ -580,7 +611,32 @@ Acceptance criteria:
 
 Current status:
 
-- pending
+- in progress
+
+What is now implemented:
+
+- first candidate artifacts were generated for:
+  `standard`, `robust`, `log1p + standard`, and `log1p + robust`
+- these candidates were compared against `f1_baseline_v1` using `P1.1`
+- none of the first T2 candidates should be promoted over `f1_baseline_v1`
+- training metadata propagation now records scaler and `log1p` choices from preprocessing metadata
+- current T2 `model_metadata.json` files now match their saved preprocessing metadata
+
+Current T2 comparison result:
+
+- `t2_standard_v1`:
+  precision delta `-0.0080`, recall delta `-0.0217`, false positive rate delta `+0.0036`
+- `t2_robust_v1`:
+  precision delta `-0.0115`, recall delta `-0.0469`, false positive rate delta `+0.0038`
+- `t2_log1p_standard_v1`:
+  precision delta `-0.0157`, recall delta `-0.0361`, false positive rate delta `+0.0086`
+- `t2_log1p_robust_v1`:
+  precision delta `-0.0103`, recall delta `-0.0036`, false positive rate delta `+0.0074`
+
+What still remains:
+
+- keep `f1_baseline_v1` as the validated baseline unless a future candidate improves the measured tradeoff
+- move to `T3` threshold and windowing experiments
 
 Prerequisite before starting:
 

@@ -56,16 +56,12 @@ Acceptance:
 - Results are deterministic for the same input file.
 - Mixed-device CSV input produces correct per-device results.
 - CSV replay and future Kafka mode share the same downstream event-processing flow.
-- Status: completed
 
 ## Phase 4: Kafka Live Mode
 Goal: consume production events from one shared Kafka topic.
 
-- Reuse the already prepared live micro-batching layer for low-latency scoring.
 - Add Kafka consumer configuration.
 - Consume one topic only.
-- For v1, use a hardcoded topic in the Kafka integration path.
-- Defer dynamic topic consumption and runtime topic switching to a later phase.
 - Extract `device_id` from each message and segregate in application code.
 - Pass events into the same window manager and scorer used by CSV replay.
 
@@ -76,8 +72,6 @@ Acceptance:
 - One mixed-device topic can be consumed continuously.
 - Device-specific windows are created correctly.
 - Anomalies are produced as live results.
-- Initial implementation works with one hardcoded topic.
-- Dynamic topic consumption is explicitly out of scope for v1.
 
 ## Phase 5: Output and Result Handling
 Goal: make both modes produce consistent results.
@@ -151,11 +145,12 @@ Current detection flow:
 
 ```text
 CSV dataset
-  -> CSV replay adapter normalizes each row into a NormalizedEvent
-  -> EventProcessor handles one event at a time
-  -> route each event by device_id into DeviceWindowManager
-  -> emit one ready raw window per device after warm-up
-  -> scale and score window with shared inference core
+  -> load dataframe
+  -> scale features
+  -> iterate rows sequentially
+  -> route each row by device_id into DeviceWindowManager
+  -> emit one ready window per device after warm-up
+  -> score window with shared inference core
   -> save anomaly_results.csv / anomaly_windows.json
 ```
 
@@ -171,51 +166,9 @@ CSV dataset
 
 ## Remaining Gap Before Kafka
 
-The project now has:
+After Phase 2, the project is already using rolling per-device windows for CSV detection, but it still lacks:
 
-- shared inference core
-- per-device rolling window manager
-- explicit CSV replay mode
-- normalized event schema
-- shared event processor
-- reusable live micro-batching layer for low-latency stream scoring
-
-It still lacks:
-
+- an explicit reusable event processor abstraction
+- a dedicated CSV replay mode/adapter
+- a normalized event schema shared by CSV and Kafka sources
 - Kafka consumer integration
-
-## Live Stream Preparation
-
-Before Kafka integration, a reusable live micro-batch scoring component has been added.
-
-Current live-stream-ready behavior:
-
-```text
-event arrives
-  -> normalize event
-  -> scale event
-  -> update per-device rolling buffer
-  -> if window becomes ready, queue it for scoring
-  -> flush scoring when:
-       batch_size reached
-       or max_wait_ms elapsed
-```
-
-Current default micro-batch policy:
-
-- `batch_size = 8`
-- `max_wait_ms = 50`
-
-This is prepared for Phase 4, but it is not yet wired to Kafka.
-
-## Phase 4 Scope Decision
-
-Kafka Phase 4 will be implemented in two steps:
-
-- v1:
-  - one hardcoded input topic
-  - live ingestion and anomaly scoring
-  - no dynamic topic switching
-- later enhancement:
-  - configurable or dynamic topic consumption
-  - topic update handling without redesigning the scoring pipeline

@@ -4,6 +4,7 @@ import argparse
 import json
 from dataclasses import asdict
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 
@@ -24,6 +25,34 @@ def load_training_arrays(paths: ProjectPaths) -> tuple[np.ndarray, np.ndarray]:
     x_train = np.load(x_train_path)
     y_train = np.load(y_train_path)
     return x_train, y_train
+
+
+def load_preprocessing_metadata(paths: ProjectPaths) -> dict[str, Any]:
+    if not paths.preprocessing_metadata_file.exists():
+        return {}
+    with open(paths.preprocessing_metadata_file, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def build_feature_config_from_preprocessing_metadata(
+    feature_config: FeatureEngineeringConfig,
+    preprocessing_metadata: dict[str, Any],
+) -> FeatureEngineeringConfig:
+    scaler_name = preprocessing_metadata.get("scaler_name") or feature_config.scaler_name
+    log1p_features = (
+        preprocessing_metadata.get("log1p_features")
+        if preprocessing_metadata.get("log1p_features") is not None
+        else feature_config.log1p_features
+    )
+    return FeatureEngineeringConfig(
+        sequence_length=feature_config.sequence_length,
+        feature_columns=feature_config.feature_columns,
+        train_split=feature_config.train_split,
+        normal_label=feature_config.normal_label,
+        save_scaler=feature_config.save_scaler,
+        scaler_name=scaler_name,
+        log1p_features=tuple(log1p_features),
+    )
 
 
 def build_dataloader(
@@ -54,6 +83,7 @@ def save_training_artifacts(
     paths: ProjectPaths,
     config: TrainingConfig,
     feature_config: FeatureEngineeringConfig,
+    preprocessing_metadata: dict[str, Any],
     input_size: int,
     threshold: float,
     train_loss_history: list[float],
@@ -71,6 +101,10 @@ def save_training_artifacts(
         "learning_rate": config.learning_rate,
         "threshold": threshold,
         "feature_config": asdict(feature_config),
+        "preprocessing_config": {
+            "scaler_name": preprocessing_metadata.get("scaler_name"),
+            "log1p_features": preprocessing_metadata.get("log1p_features"),
+        },
         "training_config": asdict(config),
         "preprocessing_metadata_file": str(paths.preprocessing_metadata_file),
         "preprocessing_metadata_exists": paths.preprocessing_metadata_file.exists(),
@@ -91,6 +125,12 @@ def train_model(
     config = config or TrainingConfig()
     feature_config = feature_config or FeatureEngineeringConfig()
     paths.ensure_directories()
+
+    preprocessing_metadata = load_preprocessing_metadata(paths)
+    feature_config = build_feature_config_from_preprocessing_metadata(
+        feature_config,
+        preprocessing_metadata,
+    )
 
     x_train, y_train = load_training_arrays(paths)
     input_size = x_train.shape[2]
@@ -137,6 +177,7 @@ def train_model(
         paths=paths,
         config=config,
         feature_config=feature_config,
+        preprocessing_metadata=preprocessing_metadata,
         input_size=input_size,
         threshold=threshold,
         train_loss_history=train_loss_history,

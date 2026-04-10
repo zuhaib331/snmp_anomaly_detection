@@ -43,6 +43,7 @@ python3 main.py generate-data
 python3 main.py preprocess
 python3 main.py train
 python3 main.py evaluate-baseline
+python3 main.py compare-artifacts
 python3 main.py detect
 python3 main.py detect-csv
 python3 main.py detect-kafka-dry
@@ -102,6 +103,16 @@ Current meaningful artifact directories:
   preprocess-only historical reference
 - `f1_baseline_v1`
   current validated `F1` baseline
+- `t1_candidate_v1`
+  first `T1` synthetic candidate reviewed against the baseline
+- `t2_standard_v1`
+  first `T2` StandardScaler candidate
+- `t2_robust_v1`
+  first `T2` RobustScaler candidate
+- `t2_log1p_standard_v1`
+  first `T2` log1p plus StandardScaler candidate
+- `t2_log1p_robust_v1`
+  first `T2` log1p plus RobustScaler candidate
 
 Rule:
 - use the same artifact directory name for `preprocess`, `train`, and `detect` when they belong to the same run
@@ -146,6 +157,12 @@ This does the following:
 3. trains the LSTM autoencoder on the `F1` feature set
 4. runs anomaly detection using the same validated artifact set
 5. saves the `P1` time split and baseline metrics report
+
+Optional candidate comparison, once candidate `P1` metrics reports already exist:
+
+```bash
+python3 main.py compare-artifacts --baseline-artifact-dir-name f1_baseline_v1 --candidate-artifact-dir-name t1_candidate_v1 --candidate-artifact-dir-name t2_standard_v1 --candidate-artifact-dir-name t2_robust_v1 --candidate-artifact-dir-name t2_log1p_standard_v1 --candidate-artifact-dir-name t2_log1p_robust_v1
+```
 
 ## 7. Run Each Step Separately
 
@@ -198,6 +215,7 @@ Optional `T2` preprocessing examples:
 python3 main.py preprocess --artifact-dir-name t2_standard_v1 --scaler-name standard
 python3 main.py preprocess --artifact-dir-name t2_robust_v1 --scaler-name robust
 python3 main.py preprocess --artifact-dir-name t2_log1p_standard_v1 --scaler-name standard --log1p-features in_rate out_rate error_rate
+python3 main.py preprocess --artifact-dir-name t2_log1p_robust_v1 --scaler-name robust --log1p-features in_rate out_rate error_rate
 ```
 
 What this step does:
@@ -308,7 +326,88 @@ Current saved `P1` summary for `f1_baseline_v1`:
 - false positive rate:
   `0.0559`
 
-### G. Run Kafka dry ingestion
+### G. Run `P1.1` artifact comparison
+
+Run this after candidate artifacts already have saved `P1` metrics reports.
+The comparison step reads the existing `*_p1_baseline_metrics.json` files and does not rerun inference.
+
+If you need to recreate candidate `P1` reports first, use the same artifact name across `preprocess`, `train`, and `evaluate-baseline`.
+For example:
+
+```bash
+python3 main.py preprocess --artifact-dir-name t1_candidate_v1
+python3 main.py train --artifact-dir-name t1_candidate_v1
+python3 main.py evaluate-baseline --artifact-dir-name t1_candidate_v1
+
+python3 main.py preprocess --artifact-dir-name t2_standard_v1 --scaler-name standard
+python3 main.py train --artifact-dir-name t2_standard_v1
+python3 main.py evaluate-baseline --artifact-dir-name t2_standard_v1
+
+python3 main.py preprocess --artifact-dir-name t2_robust_v1 --scaler-name robust
+python3 main.py train --artifact-dir-name t2_robust_v1
+python3 main.py evaluate-baseline --artifact-dir-name t2_robust_v1
+
+python3 main.py preprocess --artifact-dir-name t2_log1p_standard_v1 --scaler-name standard --log1p-features in_rate out_rate error_rate
+python3 main.py train --artifact-dir-name t2_log1p_standard_v1
+python3 main.py evaluate-baseline --artifact-dir-name t2_log1p_standard_v1
+
+python3 main.py preprocess --artifact-dir-name t2_log1p_robust_v1 --scaler-name robust --log1p-features in_rate out_rate error_rate
+python3 main.py train --artifact-dir-name t2_log1p_robust_v1
+python3 main.py evaluate-baseline --artifact-dir-name t2_log1p_robust_v1
+```
+
+Current note:
+- T2 candidate preprocessing metadata records scaler and `log1p` choices correctly
+- T2 `model_metadata.json` now mirrors those preprocessing choices
+- the current comparison report should have no scaler or `log1p` metadata consistency warnings
+
+```bash
+python3 main.py compare-artifacts --baseline-artifact-dir-name f1_baseline_v1 --candidate-artifact-dir-name t1_candidate_v1 --candidate-artifact-dir-name t2_standard_v1 --candidate-artifact-dir-name t2_robust_v1 --candidate-artifact-dir-name t2_log1p_standard_v1 --candidate-artifact-dir-name t2_log1p_robust_v1
+```
+
+Shorter example for comparing only one candidate:
+
+```bash
+python3 main.py compare-artifacts --baseline-artifact-dir-name f1_baseline_v1 --candidate-artifact-dir-name t1_candidate_v1
+```
+
+What this step does:
+- loads the saved `P1` metrics report for the baseline artifact
+- loads the saved `P1` metrics report for each candidate artifact
+- computes candidate-minus-baseline deltas for overall metrics
+- computes candidate-minus-baseline deltas for train, validation, and test splits
+- includes saved top-interface false-positive regression and improvement highlights
+- checks whether model metadata agrees with preprocessing metadata for scaler and `log1p` choices
+- writes a repeatable `P1.1` comparison report
+
+Output:
+- `snmp_anomaly_detection/outputs/f1_baseline_v1_vs_5_candidates_p1_1_comparison.json`
+
+How to read the report:
+- positive precision delta is better
+- positive recall delta is better
+- negative false positive rate delta is better
+- `recommendation: keep_baseline` means the candidate should not replace `f1_baseline_v1`
+- metadata warnings mean a candidate should not be trusted as a clean experiment artifact until fixed
+
+Current saved `P1.1` result:
+- `t1_candidate_v1`:
+  precision delta `-0.0027`, recall delta `-0.0036`, false positive rate delta `+0.0015`, recommendation `keep_baseline`
+- `t2_standard_v1`:
+  precision delta `-0.0080`, recall delta `-0.0217`, false positive rate delta `+0.0036`, recommendation `keep_baseline`
+- `t2_robust_v1`:
+  precision delta `-0.0115`, recall delta `-0.0469`, false positive rate delta `+0.0038`, recommendation `keep_baseline`
+- `t2_log1p_standard_v1`:
+  precision delta `-0.0157`, recall delta `-0.0361`, false positive rate delta `+0.0086`, recommendation `keep_baseline`
+- `t2_log1p_robust_v1`:
+  precision delta `-0.0103`, recall delta `-0.0036`, false positive rate delta `+0.0074`, recommendation `keep_baseline`
+
+Current decision:
+- keep `f1_baseline_v1` as the validated baseline
+- T2 metadata propagation is fixed for scaler and `log1p` tracking
+- move next toward `T3` threshold and windowing experiments
+
+### H. Run Kafka dry ingestion
 
 ```bash
 python3 main.py detect-kafka-dry
@@ -320,7 +419,7 @@ Notes:
 - does not perform anomaly scoring
 - stop with `Ctrl+C`
 
-### H. Publish Kafka test data
+### I. Publish Kafka test data
 
 ```bash
 python3 main.py produce-kafka-test-data
@@ -332,7 +431,7 @@ Notes:
 - the live synthetic Kafka producer now also includes `interface`
 - payloads use cumulative counters, matching the `F1` online-rate logic better than before
 
-### I. Run Kafka live detection
+### J. Run Kafka live detection
 
 ```bash
 python3 main.py detect-kafka --artifact-dir-name f1_baseline_v1
@@ -442,3 +541,13 @@ If detection completes successfully, check:
 - `snmp_anomaly_detection/outputs/anomaly_windows.json`
 - `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_time_split.json`
 - `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_baseline_metrics.json`
+
+If candidate `P1` metrics reports already exist, also verify the comparison report:
+
+```bash
+python3 main.py compare-artifacts --baseline-artifact-dir-name f1_baseline_v1 --candidate-artifact-dir-name t1_candidate_v1 --candidate-artifact-dir-name t2_standard_v1 --candidate-artifact-dir-name t2_robust_v1 --candidate-artifact-dir-name t2_log1p_standard_v1 --candidate-artifact-dir-name t2_log1p_robust_v1
+```
+
+Expected comparison output:
+
+- `snmp_anomaly_detection/outputs/f1_baseline_v1_vs_5_candidates_p1_1_comparison.json`

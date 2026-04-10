@@ -4,6 +4,8 @@ import argparse
 import sys
 
 from snmp_anomaly_detection.data.dataset_builder import main as build_dataset_main
+from snmp_anomaly_detection.evaluation.p1_1_comparison import main as compare_p1_main
+from snmp_anomaly_detection.evaluation.p1_baseline import main as evaluate_p1_main
 from snmp_anomaly_detection.inference.csv_replay import main as detect_csv_main
 from snmp_anomaly_detection.inference.detect_anomalies import main as detect_main
 from snmp_anomaly_detection.preprocessing.feature_engineering import (
@@ -25,6 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
             "generate-data",
             "preprocess",
             "train",
+            "evaluate-baseline",
+            "compare-artifacts",
             "detect",
             "detect-csv",
             "detect-kafka-dry",
@@ -52,6 +56,10 @@ def main() -> None:
         feature_engineering_main()
     elif args.step == "train":
         train_main()
+    elif args.step == "evaluate-baseline":
+        evaluate_p1_main()
+    elif args.step == "compare-artifacts":
+        compare_p1_main()
     elif args.step == "detect":
         detect_main()
     elif args.step == "detect-csv":
