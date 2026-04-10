@@ -5,7 +5,10 @@ import json
 from collections import Counter
 
 from snmp_anomaly_detection.config import FeatureEngineeringConfig, KafkaConfig, ProjectPaths
-from snmp_anomaly_detection.inference.core import load_inference_artifacts
+from snmp_anomaly_detection.inference.core import (
+    load_inference_artifacts,
+    resolve_feature_config_for_artifact,
+)
 from snmp_anomaly_detection.inference.event_processor import EventProcessor, ProcessedWindow
 from snmp_anomaly_detection.inference.live_microbatch import (
     LiveMicroBatchProcessor,
@@ -74,8 +77,8 @@ def detect_kafka(
     paths: ProjectPaths | None = None,
 ) -> int:
     kafka_config = kafka_config or KafkaConfig()
-    feature_config = feature_config or FeatureEngineeringConfig()
     paths = paths or ProjectPaths()
+    feature_config = resolve_feature_config_for_artifact(paths=paths, config=feature_config)
 
     artifacts = load_inference_artifacts(paths=paths, config=feature_config)
     event_processor = EventProcessor(artifacts=artifacts, config=feature_config)

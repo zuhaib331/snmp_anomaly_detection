@@ -250,10 +250,16 @@ def main() -> None:
         default=None,
         help="Optional feature names to transform with log1p before scaling.",
     )
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        help="Sliding window length used for sequence generation.",
+    )
     args = parser.parse_args()
 
     default_config = FeatureEngineeringConfig()
     config = FeatureEngineeringConfig(
+        sequence_length=args.sequence_length or default_config.sequence_length,
         scaler_name=args.scaler_name or default_config.scaler_name,
         log1p_features=tuple(args.log1p_features)
         if args.log1p_features is not None

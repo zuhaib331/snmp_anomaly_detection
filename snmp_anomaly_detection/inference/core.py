@@ -49,6 +49,38 @@ def load_model_metadata(paths: ProjectPaths) -> dict[str, Any]:
         return json.load(file)
 
 
+def build_feature_config_from_artifact_metadata(
+    feature_config: FeatureEngineeringConfig,
+    metadata: dict[str, Any],
+) -> FeatureEngineeringConfig:
+    saved_feature_config = metadata.get("feature_config", {})
+    return FeatureEngineeringConfig(
+        sequence_length=int(
+            saved_feature_config.get("sequence_length", feature_config.sequence_length)
+        ),
+        feature_columns=tuple(
+            saved_feature_config.get("feature_columns", feature_config.feature_columns)
+        ),
+        train_split=feature_config.train_split,
+        normal_label=feature_config.normal_label,
+        save_scaler=feature_config.save_scaler,
+        scaler_name=saved_feature_config.get("scaler_name", feature_config.scaler_name),
+        log1p_features=tuple(
+            saved_feature_config.get("log1p_features", feature_config.log1p_features)
+        ),
+    )
+
+
+def resolve_feature_config_for_artifact(
+    paths: ProjectPaths | None = None,
+    config: FeatureEngineeringConfig | None = None,
+) -> FeatureEngineeringConfig:
+    paths = paths or ProjectPaths()
+    config = config or FeatureEngineeringConfig()
+    metadata = load_model_metadata(paths)
+    return build_feature_config_from_artifact_metadata(config, metadata)
+
+
 def load_inference_artifacts(
     paths: ProjectPaths | None = None,
     config: FeatureEngineeringConfig | None = None,

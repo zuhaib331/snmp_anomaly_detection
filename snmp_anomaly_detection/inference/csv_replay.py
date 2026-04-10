@@ -10,7 +10,10 @@ from snmp_anomaly_detection.config import (
     InferenceConfig,
     ProjectPaths,
 )
-from snmp_anomaly_detection.inference.core import load_inference_artifacts
+from snmp_anomaly_detection.inference.core import (
+    load_inference_artifacts,
+    resolve_feature_config_for_artifact,
+)
 from snmp_anomaly_detection.inference.event_processor import EventProcessor
 from snmp_anomaly_detection.inference.events import NormalizedEvent
 from snmp_anomaly_detection.inference.output_schema import (
@@ -70,7 +73,7 @@ def detect_csv_replay(
     inference_config: InferenceConfig | None = None,
 ) -> pd.DataFrame:
     paths = paths or ProjectPaths()
-    config = config or FeatureEngineeringConfig()
+    config = resolve_feature_config_for_artifact(paths=paths, config=config)
     inference_config = inference_config or InferenceConfig()
 
     dataframe = load_dataset(input_file=input_file, paths=paths)

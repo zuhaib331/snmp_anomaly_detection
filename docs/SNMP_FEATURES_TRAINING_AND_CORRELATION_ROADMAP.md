@@ -29,8 +29,10 @@ Current project status in plain language:
 - `P1.1` is completed for the first synthetic candidate comparison set
 - `T1` first candidate has been reviewed against the baseline
 - `T2` first scaler and transformation comparisons have been generated
+- `T3` first threshold and windowing comparisons have been generated
 - the validated artifact set is `f1_baseline_v1`
-- the next recommended work is `T3` threshold and windowing experiments
+- the best `T3` review candidate so far is `t3_seq10_std3_5_v1`
+- the next recommended work is to complete `P2`, then continue to `F2` and `F3`
 
 Current validated baseline:
 
@@ -154,7 +156,7 @@ What we achieved:
 Even after `F1`, the project still has these gaps:
 
 - real known-normal and maintenance labels are not yet available for training exclusion
-- richer threshold and windowing experiments are not yet implemented
+- per-interface thresholding is not yet implemented
 - richer interface health features are present in data but not yet active in the model
 - contextual rolling features are not yet added
 - correlation with non-SNMP events is not yet implemented
@@ -169,6 +171,7 @@ This is the simplest view of the roadmap:
 - `P1.1`: completed
 - `T1`: first synthetic candidate reviewed; real known-normal/maintenance label support still pending
 - `T2`: first comparison completed; metadata propagation fixed
+- `T3`: first comparison completed; keep `f1_baseline_v1`, review `t3_seq10_std3_5_v1` if lower alert noise is preferred
 - `P2`: in progress
 - `F2`: pending
 - `F3`: pending
@@ -181,16 +184,18 @@ This is the simplest view of the roadmap:
 
 The next best step is:
 
-- move to `T3` threshold and windowing experiments against `f1_baseline_v1`
-- then complete `P2` before starting `F2` and `F3`
+- complete `P2`
+- then start `F2`
+- then continue to `F3`
 
 Why this is the right order:
 
 - `F1` already gave us a stable feature baseline
 - `P1` and `P1.1` now give us a repeatable evaluation and comparison foundation
 - the first `T1` and `T2` candidates did not beat `f1_baseline_v1`
-- T2 metadata cleanup is complete, so future scaler comparisons can be tracked consistently
-- `T3` can directly target the current false-positive/recall tradeoff before we add more features
+- `T3` has now been tested, and none of the first candidates clearly beats `f1_baseline_v1`
+- `t3_seq10_std3_5_v1` is the best lower-noise review candidate, but it is still a tradeoff rather than a strict replacement
+- the next meaningful gains are more likely to come from richer labels and richer features than from simple threshold tuning alone
 
 In short:
 
@@ -198,6 +203,7 @@ In short:
 - then compare preprocessing choices
 - then add artifact-to-artifact comparison support for repeatable experiment reviews
 - then tune threshold and windowing
+- then complete `P2`
 - then add richer features
 - then add event correlation
 
@@ -664,7 +670,44 @@ Acceptance criteria:
 
 Current status:
 
-- pending
+- first comparison completed
+
+What is now implemented:
+
+- CLI support now exists for:
+  `--sequence-length`
+- training CLI now supports:
+  `--threshold-mode`, `--threshold-std-multiplier`, and `--threshold-percentile`
+- replay, evaluation, and Kafka inference now load saved artifact feature settings automatically
+- the first `T3` experiment set was run against `f1_baseline_v1`
+
+First `T3` candidates reviewed:
+
+- `t3_seq10_std2_5_v1`
+- `t3_seq10_std3_5_v1`
+- `t3_seq10_p995_v1`
+- `t3_seq10_p999_v1`
+- `t3_seq_8_std3_v1`
+- `t3_seq_12_std3_v1`
+- `t3_seq_15_std3_v1`
+
+Current result in simple words:
+
+- `t3_seq10_std3_5_v1` is the best lower-noise `T3` candidate so far
+- `t3_seq10_p999_v1` is the strictest useful threshold-only candidate
+- `t3_seq10_std2_5_v1` improves recall but creates too many extra false positives
+- sequence-length variants `8`, `12`, and `15` were too noisy to promote
+- no tested `T3` candidate clearly beats `f1_baseline_v1` across precision, recall, and false positive rate together
+
+Current recommendation:
+
+- keep `f1_baseline_v1` as the validated default artifact
+- review `t3_seq10_std3_5_v1` only if lower alert noise is preferred over a small recall drop
+
+What still remains:
+
+- add per-interface threshold experiments if we continue `T3`
+- document the preferred strict-review candidate separately from the validated default baseline
 
 ### Phase `T4`: Compare model baselines
 

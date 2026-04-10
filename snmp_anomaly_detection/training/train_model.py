@@ -78,6 +78,19 @@ def compute_reconstruction_errors(model, tensor_data, loss_fn):
         return per_timestep_loss.mean(dim=(1, 2)).cpu().numpy()
 
 
+def compute_anomaly_threshold(
+    train_errors: np.ndarray,
+    config: TrainingConfig,
+) -> float:
+    if config.threshold_mode == "stddev":
+        return float(
+            train_errors.mean() + config.threshold_std_multiplier * train_errors.std()
+        )
+    if config.threshold_mode == "percentile":
+        return float(np.percentile(train_errors, config.threshold_percentile))
+    raise ValueError(f"Unsupported threshold_mode: {config.threshold_mode}")
+
+
 def save_training_artifacts(
     model,
     paths: ProjectPaths,
@@ -104,6 +117,11 @@ def save_training_artifacts(
         "preprocessing_config": {
             "scaler_name": preprocessing_metadata.get("scaler_name"),
             "log1p_features": preprocessing_metadata.get("log1p_features"),
+        },
+        "threshold_config": {
+            "mode": config.threshold_mode,
+            "std_multiplier": config.threshold_std_multiplier,
+            "percentile": config.threshold_percentile,
         },
         "training_config": asdict(config),
         "preprocessing_metadata_file": str(paths.preprocessing_metadata_file),
@@ -168,9 +186,7 @@ def train_model(
     train_tensor = torch.tensor(x_train, dtype=torch.float32)
     detailed_loss_fn = torch.nn.MSELoss(reduction="none")
     train_errors = compute_reconstruction_errors(model, train_tensor, detailed_loss_fn)
-    threshold = float(
-        train_errors.mean() + config.threshold_std_multiplier * train_errors.std()
-    )
+    threshold = compute_anomaly_threshold(train_errors, config)
 
     save_training_artifacts(
         model=model,
@@ -206,6 +222,21 @@ def main() -> None:
         "--artifact-dir",
         help="Explicit artifact directory path to use for training artifacts.",
     )
+    parser.add_argument(
+        "--threshold-mode",
+        choices=("stddev", "percentile"),
+        help="Threshold rule to derive from training reconstruction errors.",
+    )
+    parser.add_argument(
+        "--threshold-std-multiplier",
+        type=float,
+        help="K value for the threshold rule mean + K * std.",
+    )
+    parser.add_argument(
+        "--threshold-percentile",
+        type=float,
+        help="Percentile to use when threshold mode is percentile.",
+    )
     args = parser.parse_args()
 
     default_paths = ProjectPaths()
@@ -213,7 +244,26 @@ def main() -> None:
         artifact_dir_name=args.artifact_dir_name or default_paths.artifact_dir_name,
         artifact_dir_override=args.artifact_dir,
     )
-    train_model(paths=paths)
+    default_config = TrainingConfig()
+    config = TrainingConfig(
+        batch_size=default_config.batch_size,
+        epochs=default_config.epochs,
+        learning_rate=default_config.learning_rate,
+        hidden_size=default_config.hidden_size,
+        latent_size=default_config.latent_size,
+        threshold_mode=args.threshold_mode or default_config.threshold_mode,
+        threshold_std_multiplier=(
+            args.threshold_std_multiplier
+            if args.threshold_std_multiplier is not None
+            else default_config.threshold_std_multiplier
+        ),
+        threshold_percentile=(
+            args.threshold_percentile
+            if args.threshold_percentile is not None
+            else default_config.threshold_percentile
+        ),
+    )
+    train_model(paths=paths, config=config)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from snmp_anomaly_detection.evaluation.time_split import (
     build_time_split_definition,
     label_timestamp,
 )
+from snmp_anomaly_detection.inference.core import resolve_feature_config_for_artifact
 from snmp_anomaly_detection.inference.csv_replay import detect_csv_replay
 from snmp_anomaly_detection.preprocessing.feature_engineering import load_dataset
 
@@ -168,7 +169,7 @@ def evaluate_p1_baseline(
     evaluation_config: EvaluationConfig | None = None,
 ) -> dict[str, object]:
     paths = paths or ProjectPaths()
-    feature_config = feature_config or FeatureEngineeringConfig()
+    feature_config = resolve_feature_config_for_artifact(paths=paths, config=feature_config)
     evaluation_config = evaluation_config or EvaluationConfig()
     paths.ensure_directories()
 
