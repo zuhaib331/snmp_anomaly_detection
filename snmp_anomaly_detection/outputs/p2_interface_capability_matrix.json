@@ -1,0 +1,662 @@
+{
+  "stage": "P2",
+  "dataset_path": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/data/synthetic_snmp_dataset.csv",
+  "analysis_scope_policy": {
+    "primary_scope": "per_interface",
+    "fallback_scope": "per_device"
+  },
+  "summary": {
+    "row_count": 30000,
+    "device_count": 15,
+    "stream_count": 15,
+    "full_feature_stream_count": 15,
+    "fallback_stream_count": 0,
+    "full_feature_device_count": 15,
+    "fallback_device_count": 0
+  },
+  "feature_source_summary": {
+    "interface_speed": {
+      "selected_column": "interface_speed_mbps",
+      "available_aliases": [
+        "interface_speed_mbps"
+      ],
+      "column_present": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0,
+      "positive_rows": 30000,
+      "positive_ratio": 1.0,
+      "unique_non_null_values": 1
+    },
+    "packet_counter_in": {
+      "selected_column": "in_ucast_pkts",
+      "available_aliases": [
+        "in_ucast_pkts"
+      ],
+      "column_present": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0,
+      "positive_rows": 30000,
+      "positive_ratio": 1.0,
+      "unique_non_null_values": 28064
+    },
+    "packet_counter_out": {
+      "selected_column": "out_ucast_pkts",
+      "available_aliases": [
+        "out_ucast_pkts"
+      ],
+      "column_present": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0,
+      "positive_rows": 30000,
+      "positive_ratio": 1.0,
+      "unique_non_null_values": 27861
+    },
+    "discard_counter_in": {
+      "selected_column": "in_discards",
+      "available_aliases": [
+        "in_discards"
+      ],
+      "column_present": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0,
+      "positive_rows": 29670,
+      "positive_ratio": 0.989,
+      "unique_non_null_values": 271
+    },
+    "discard_counter_out": {
+      "selected_column": "out_discards",
+      "available_aliases": [
+        "out_discards"
+      ],
+      "column_present": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0,
+      "positive_rows": 29588,
+      "positive_ratio": 0.9862666666666666,
+      "unique_non_null_values": 221
+    },
+    "interface_admin_status": {
+      "selected_column": "interface_admin_status",
+      "available_aliases": [
+        "interface_admin_status"
+      ],
+      "column_present": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0,
+      "positive_rows": 30000,
+      "positive_ratio": 1.0,
+      "unique_non_null_values": 1
+    },
+    "interface_oper_status": {
+      "selected_column": "interface_oper_status",
+      "available_aliases": [
+        "interface_oper_status"
+      ],
+      "column_present": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0,
+      "positive_rows": 30000,
+      "positive_ratio": 1.0,
+      "unique_non_null_values": 2
+    }
+  },
+  "device_scope_recommendations": [
+    {
+      "device_id": "dev_0",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_1",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_10",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_11",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_12",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_13",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_14",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_2",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_3",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_4",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_5",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_6",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_7",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_8",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_9",
+      "interface_count": 1,
+      "fully_covered_interface_count": 1,
+      "fallback_interfaces": [],
+      "recommended_scope": "per_interface"
+    }
+  ],
+  "stream_capability_matrix": [
+    {
+      "device_id": "dev_0",
+      "interface": "eth2",
+      "stream_id": "dev_0::eth2",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_1",
+      "interface": "eth2",
+      "stream_id": "dev_1::eth2",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_10",
+      "interface": "eth0",
+      "stream_id": "dev_10::eth0",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_11",
+      "interface": "eth3",
+      "stream_id": "dev_11::eth3",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_12",
+      "interface": "eth3",
+      "stream_id": "dev_12::eth3",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_13",
+      "interface": "eth0",
+      "stream_id": "dev_13::eth0",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_14",
+      "interface": "eth3",
+      "stream_id": "dev_14::eth3",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_2",
+      "interface": "eth0",
+      "stream_id": "dev_2::eth0",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_3",
+      "interface": "eth3",
+      "stream_id": "dev_3::eth3",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_4",
+      "interface": "eth0",
+      "stream_id": "dev_4::eth0",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_5",
+      "interface": "eth0",
+      "stream_id": "dev_5::eth0",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_6",
+      "interface": "eth2",
+      "stream_id": "dev_6::eth2",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_7",
+      "interface": "eth1",
+      "stream_id": "dev_7::eth1",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_8",
+      "interface": "eth0",
+      "stream_id": "dev_8::eth0",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    },
+    {
+      "device_id": "dev_9",
+      "interface": "eth2",
+      "stream_id": "dev_9::eth2",
+      "row_count": 2000,
+      "timestamp_min": "2025-01-01 00:00:00",
+      "timestamp_max": "2025-01-07 22:35:00",
+      "has_named_interface": true,
+      "recommended_scope": "per_interface",
+      "full_per_interface_feature_coverage": true,
+      "missing_capabilities": [],
+      "capabilities": {
+        "interface_speed": true,
+        "packet_counter_in": true,
+        "packet_counter_out": true,
+        "discard_counter_in": true,
+        "discard_counter_out": true,
+        "interface_admin_status": true,
+        "interface_oper_status": true
+      },
+      "source_columns": {
+        "interface_speed": "interface_speed_mbps",
+        "packet_counter_in": "in_ucast_pkts",
+        "packet_counter_out": "out_ucast_pkts",
+        "discard_counter_in": "in_discards",
+        "discard_counter_out": "out_discards",
+        "interface_admin_status": "interface_admin_status",
+        "interface_oper_status": "interface_oper_status"
+      }
+    }
+  ]
+}

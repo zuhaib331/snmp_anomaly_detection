@@ -1,0 +1,287 @@
+{
+  "stage": "P2",
+  "goal": "Define the safe extended interface-level schema needed before F2 and F3.",
+  "current_validated_baseline_features": [
+    "cpu",
+    "memory",
+    "in_rate",
+    "out_rate",
+    "error_rate"
+  ],
+  "recommended_f2_candidate_features": [
+    "cpu",
+    "memory",
+    "in_rate",
+    "out_rate",
+    "error_rate",
+    "utilization_in_pct",
+    "utilization_out_pct",
+    "discard_rate_in",
+    "discard_rate_out",
+    "packet_rate_in",
+    "packet_rate_out",
+    "in_out_ratio",
+    "interface_oper_status",
+    "interface_admin_status"
+  ],
+  "current_live_input_schema": {
+    "normalized_event_fields": [
+      "anomaly",
+      "cpu",
+      "device_id",
+      "errors",
+      "in_octets",
+      "interface",
+      "memory",
+      "out_octets",
+      "timestamp"
+    ],
+    "kafka_required_fields": [
+      "timestamp",
+      "device_id",
+      "interface",
+      "cpu",
+      "memory",
+      "in_octets",
+      "out_octets",
+      "errors"
+    ]
+  },
+  "required_live_input_additions_for_f2": [
+    "interface_speed_mbps",
+    "in_ucast_pkts",
+    "out_ucast_pkts",
+    "in_discards",
+    "out_discards",
+    "interface_admin_status",
+    "interface_oper_status"
+  ],
+  "extended_interface_row_schema": [
+    {
+      "field_name": "interface_speed_mbps",
+      "category": "capacity_source",
+      "dtype": "float",
+      "required_for_features": [
+        "utilization_in_pct",
+        "utilization_out_pct"
+      ],
+      "offline_aliases": [
+        "interface_speed_mbps",
+        "interface_speed",
+        "if_speed"
+      ],
+      "required_in_live_event": true,
+      "currently_in_live_event_schema": false,
+      "notes": "Must be positive for safe utilization calculations."
+    },
+    {
+      "field_name": "in_ucast_pkts",
+      "category": "packet_counter_source",
+      "dtype": "float",
+      "required_for_features": [
+        "packet_rate_in"
+      ],
+      "offline_aliases": [
+        "in_ucast_pkts",
+        "packets_in"
+      ],
+      "required_in_live_event": true,
+      "currently_in_live_event_schema": false,
+      "notes": "Cumulative counter; derive rate per device_id + interface."
+    },
+    {
+      "field_name": "out_ucast_pkts",
+      "category": "packet_counter_source",
+      "dtype": "float",
+      "required_for_features": [
+        "packet_rate_out"
+      ],
+      "offline_aliases": [
+        "out_ucast_pkts",
+        "packets_out"
+      ],
+      "required_in_live_event": true,
+      "currently_in_live_event_schema": false,
+      "notes": "Cumulative counter; derive rate per device_id + interface."
+    },
+    {
+      "field_name": "in_discards",
+      "category": "discard_counter_source",
+      "dtype": "float",
+      "required_for_features": [
+        "discard_rate_in"
+      ],
+      "offline_aliases": [
+        "in_discards",
+        "discard_in"
+      ],
+      "required_in_live_event": true,
+      "currently_in_live_event_schema": false,
+      "notes": "Cumulative counter; derive rate per device_id + interface."
+    },
+    {
+      "field_name": "out_discards",
+      "category": "discard_counter_source",
+      "dtype": "float",
+      "required_for_features": [
+        "discard_rate_out"
+      ],
+      "offline_aliases": [
+        "out_discards",
+        "discard_out"
+      ],
+      "required_in_live_event": true,
+      "currently_in_live_event_schema": false,
+      "notes": "Cumulative counter; derive rate per device_id + interface."
+    },
+    {
+      "field_name": "interface_admin_status",
+      "category": "state_source",
+      "dtype": "int",
+      "required_for_features": [
+        "interface_admin_status"
+      ],
+      "offline_aliases": [
+        "interface_admin_status"
+      ],
+      "required_in_live_event": true,
+      "currently_in_live_event_schema": false,
+      "notes": "Preserve as raw state value for explanation and optional training use."
+    },
+    {
+      "field_name": "interface_oper_status",
+      "category": "state_source",
+      "dtype": "int",
+      "required_for_features": [
+        "interface_oper_status"
+      ],
+      "offline_aliases": [
+        "interface_oper_status"
+      ],
+      "required_in_live_event": true,
+      "currently_in_live_event_schema": false,
+      "notes": "Preserve as raw state value for explanation and optional training use."
+    },
+    {
+      "field_name": "utilization_in_pct",
+      "category": "derived_f2_feature",
+      "dtype": "float",
+      "formula": "100 * (in_rate * 8) / (interface_speed_mbps * 1_000_000)",
+      "required_for_features": [
+        "utilization_in_pct"
+      ],
+      "required_in_live_event": false,
+      "currently_in_live_event_schema": false,
+      "notes": "Derived after rate generation; clamp or null-handle when speed is unavailable."
+    },
+    {
+      "field_name": "utilization_out_pct",
+      "category": "derived_f2_feature",
+      "dtype": "float",
+      "formula": "100 * (out_rate * 8) / (interface_speed_mbps * 1_000_000)",
+      "required_for_features": [
+        "utilization_out_pct"
+      ],
+      "required_in_live_event": false,
+      "currently_in_live_event_schema": false,
+      "notes": "Derived after rate generation; clamp or null-handle when speed is unavailable."
+    },
+    {
+      "field_name": "packet_rate_in",
+      "category": "derived_f2_feature",
+      "dtype": "float",
+      "formula": "delta(in_ucast_pkts) / elapsed_seconds",
+      "required_for_features": [
+        "packet_rate_in"
+      ],
+      "required_in_live_event": false,
+      "currently_in_live_event_schema": false,
+      "notes": "Reset-aware cumulative-counter rate."
+    },
+    {
+      "field_name": "packet_rate_out",
+      "category": "derived_f2_feature",
+      "dtype": "float",
+      "formula": "delta(out_ucast_pkts) / elapsed_seconds",
+      "required_for_features": [
+        "packet_rate_out"
+      ],
+      "required_in_live_event": false,
+      "currently_in_live_event_schema": false,
+      "notes": "Reset-aware cumulative-counter rate."
+    },
+    {
+      "field_name": "discard_rate_in",
+      "category": "derived_f2_feature",
+      "dtype": "float",
+      "formula": "delta(in_discards) / elapsed_seconds",
+      "required_for_features": [
+        "discard_rate_in"
+      ],
+      "required_in_live_event": false,
+      "currently_in_live_event_schema": false,
+      "notes": "Reset-aware cumulative-counter rate."
+    },
+    {
+      "field_name": "discard_rate_out",
+      "category": "derived_f2_feature",
+      "dtype": "float",
+      "formula": "delta(out_discards) / elapsed_seconds",
+      "required_for_features": [
+        "discard_rate_out"
+      ],
+      "required_in_live_event": false,
+      "currently_in_live_event_schema": false,
+      "notes": "Reset-aware cumulative-counter rate."
+    },
+    {
+      "field_name": "in_out_ratio",
+      "category": "derived_f2_feature",
+      "dtype": "float",
+      "formula": "in_rate / max(out_rate, epsilon)",
+      "required_for_features": [
+        "in_out_ratio"
+      ],
+      "required_in_live_event": false,
+      "currently_in_live_event_schema": false,
+      "notes": "Useful for asymmetry detection; should be epsilon-safe."
+    }
+  ],
+  "future_output_expectations": {
+    "result_records_should_preserve": [
+      "device_id",
+      "interface",
+      "stream_id",
+      "analysis_scope",
+      "top_error_feature",
+      "feature_error_<feature_name>"
+    ],
+    "anomaly_window_records_should_preserve": [
+      "window_records[].interface_speed_mbps",
+      "window_records[].interface_admin_status",
+      "window_records[].interface_oper_status",
+      "window_records[].packet_rate_in",
+      "window_records[].packet_rate_out",
+      "window_records[].discard_rate_in",
+      "window_records[].discard_rate_out",
+      "window_records[].utilization_in_pct",
+      "window_records[].utilization_out_pct",
+      "window_records[].in_out_ratio"
+    ]
+  },
+  "implementation_notes": [
+    "Offline and live paths must derive the same F2 features from the same source columns.",
+    "Per-interface remains the default path; use per-device only when the required interface-level fields are missing.",
+    "Current synthetic data has full source-field coverage for every stream in the baseline dataset.",
+    "F2 still requires live event schema expansion because the current NormalizedEvent and Kafka input contract only cover F1-era fields."
+  ],
+  "capability_summary": {
+    "row_count": 30000,
+    "device_count": 15,
+    "stream_count": 15,
+    "full_feature_stream_count": 15,
+    "fallback_stream_count": 0,
+    "full_feature_device_count": 15,
+    "fallback_device_count": 0
+  }
+}
