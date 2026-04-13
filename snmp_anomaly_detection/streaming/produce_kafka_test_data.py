@@ -45,6 +45,10 @@ class DeviceState:
     cumulative_in_octets: float = 0.0
     cumulative_out_octets: float = 0.0
     cumulative_errors: int = 0
+    cumulative_in_ucast_pkts: float = 0.0
+    cumulative_out_ucast_pkts: float = 0.0
+    cumulative_in_discards: float = 0.0
+    cumulative_out_discards: float = 0.0
 
 
 def _require_kafka() -> None:
@@ -88,7 +92,14 @@ def _build_payload(device_state: DeviceState, config: SyntheticStreamConfig) -> 
     in_octets_increment = float(max(traffic * random.uniform(800, 1200), 0))
     out_octets_increment = float(max(traffic * random.uniform(700, 1100), 0))
     errors_increment = int(np.random.poisson(1))
+    bytes_per_packet = max(in_octets_increment / max(np.random.normal(850, 120), 256.0), 1.0)
+    in_ucast_pkts_increment = float(max(in_octets_increment / bytes_per_packet, 0.0))
+    out_ucast_pkts_increment = float(max(out_octets_increment / bytes_per_packet, 0.0))
+    in_discards_increment = int(np.random.poisson(0.2))
+    out_discards_increment = int(np.random.poisson(0.2))
     anomaly_type = "normal"
+    interface_admin_status = 1
+    interface_oper_status = 1
 
     anomaly = 0
     if random.random() < config.anomaly_probability:
@@ -96,12 +107,18 @@ def _build_payload(device_state: DeviceState, config: SyntheticStreamConfig) -> 
         if anomaly_type == "traffic_spike":
             in_octets_increment *= random.uniform(2.5, 4.5)
             out_octets_increment *= random.uniform(2.0, 4.0)
+            in_ucast_pkts_increment *= random.uniform(2.0, 4.0)
+            out_ucast_pkts_increment *= random.uniform(1.8, 3.5)
             cpu = float(np.clip(cpu + random.uniform(8, 20), 0, 100))
         elif anomaly_type == "traffic_drop":
             in_octets_increment *= random.uniform(0.02, 0.20)
             out_octets_increment *= random.uniform(0.02, 0.20)
+            in_ucast_pkts_increment *= random.uniform(0.02, 0.20)
+            out_ucast_pkts_increment *= random.uniform(0.02, 0.20)
         elif anomaly_type == "error_burst":
             errors_increment += random.randint(20, 120)
+            in_discards_increment += random.randint(5, 20)
+            out_discards_increment += random.randint(5, 20)
         elif anomaly_type == "cpu_spike":
             cpu = float(np.clip(inject_anomaly(cpu), 0, 100))
         elif anomaly_type == "memory_spike":
@@ -109,16 +126,29 @@ def _build_payload(device_state: DeviceState, config: SyntheticStreamConfig) -> 
         elif anomaly_type == "link_down":
             in_octets_increment = 0.0
             out_octets_increment = 0.0
+            in_ucast_pkts_increment = 0.0
+            out_ucast_pkts_increment = 0.0
+            in_discards_increment += random.randint(1, 6)
+            out_discards_increment += random.randint(1, 6)
             errors_increment += random.randint(1, 10)
+            interface_oper_status = 2
         anomaly = 1
 
     in_octets_increment = max(in_octets_increment, 0.0)
     out_octets_increment = max(out_octets_increment, 0.0)
     errors_increment = max(errors_increment, 0)
+    in_ucast_pkts_increment = max(in_ucast_pkts_increment, 0.0)
+    out_ucast_pkts_increment = max(out_ucast_pkts_increment, 0.0)
+    in_discards_increment = max(in_discards_increment, 0)
+    out_discards_increment = max(out_discards_increment, 0)
 
     device_state.cumulative_in_octets += in_octets_increment
     device_state.cumulative_out_octets += out_octets_increment
     device_state.cumulative_errors += errors_increment
+    device_state.cumulative_in_ucast_pkts += in_ucast_pkts_increment
+    device_state.cumulative_out_ucast_pkts += out_ucast_pkts_increment
+    device_state.cumulative_in_discards += in_discards_increment
+    device_state.cumulative_out_discards += out_discards_increment
 
     payload = {
         "timestamp": device_state.timestamp.isoformat(),
@@ -129,6 +159,14 @@ def _build_payload(device_state: DeviceState, config: SyntheticStreamConfig) -> 
         "in_octets": round(device_state.cumulative_in_octets, 2),
         "out_octets": round(device_state.cumulative_out_octets, 2),
         "errors": device_state.cumulative_errors,
+        "in_ucast_pkts": round(device_state.cumulative_in_ucast_pkts, 2),
+        "out_ucast_pkts": round(device_state.cumulative_out_ucast_pkts, 2),
+        "in_discards": device_state.cumulative_in_discards,
+        "out_discards": device_state.cumulative_out_discards,
+        "interface_speed_mbps": profile.interface_speed_mbps,
+        "interface_admin_status": interface_admin_status,
+        "interface_oper_status": interface_oper_status,
+        "counter_reset": 0,
         "anomaly": anomaly,
         "anomaly_type": anomaly_type,
     }

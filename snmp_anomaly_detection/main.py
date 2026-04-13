@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from snmp_anomaly_detection.data.dataset_builder import main as build_dataset_main
+from snmp_anomaly_detection.data.p2_feature_readiness import main as report_p2_main
 from snmp_anomaly_detection.evaluation.p1_1_comparison import main as compare_p1_main
 from snmp_anomaly_detection.evaluation.p1_baseline import main as evaluate_p1_main
 from snmp_anomaly_detection.inference.csv_replay import main as detect_csv_main
@@ -25,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
         "step",
         choices=[
             "generate-data",
+            "report-p2",
             "preprocess",
             "train",
             "evaluate-baseline",
@@ -52,6 +54,8 @@ def main() -> None:
 
     if args.step == "generate-data":
         build_dataset_main()
+    elif args.step == "report-p2":
+        report_p2_main()
     elif args.step == "preprocess":
         feature_engineering_main()
     elif args.step == "train":

@@ -25,6 +25,14 @@ from snmp_anomaly_detection.preprocessing.feature_engineering import load_datase
 
 
 def normalize_csv_row(row: pd.Series) -> NormalizedEvent:
+    def optional_float(field_name: str) -> float | None:
+        value = row.get(field_name)
+        return None if pd.isna(value) else float(value)
+
+    def optional_int(field_name: str) -> int | None:
+        value = row.get(field_name)
+        return None if pd.isna(value) else int(value)
+
     return NormalizedEvent(
         timestamp=row["timestamp"],
         device_id=str(row["device_id"]),
@@ -34,6 +42,14 @@ def normalize_csv_row(row: pd.Series) -> NormalizedEvent:
         in_octets=float(row["in_octets"]),
         out_octets=float(row["out_octets"]),
         errors=float(row["errors"]),
+        in_ucast_pkts=optional_float("in_ucast_pkts"),
+        out_ucast_pkts=optional_float("out_ucast_pkts"),
+        in_discards=optional_float("in_discards"),
+        out_discards=optional_float("out_discards"),
+        interface_speed_mbps=optional_float("interface_speed_mbps"),
+        interface_admin_status=optional_int("interface_admin_status"),
+        interface_oper_status=optional_int("interface_oper_status"),
+        counter_reset=int(row.get("counter_reset", 0) or 0),
         anomaly=int(row.get("anomaly", 0)),
     )
 

@@ -46,7 +46,9 @@ def build_feature_config_from_preprocessing_metadata(
     )
     return FeatureEngineeringConfig(
         sequence_length=feature_config.sequence_length,
-        feature_columns=feature_config.feature_columns,
+        feature_columns=tuple(
+            preprocessing_metadata.get("feature_columns", feature_config.feature_columns)
+        ),
         train_split=feature_config.train_split,
         normal_label=feature_config.normal_label,
         save_scaler=feature_config.save_scaler,

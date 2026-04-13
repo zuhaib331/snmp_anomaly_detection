@@ -7,6 +7,29 @@ from typing import Final
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 DEFAULT_ARTIFACT_DIR_NAME: Final[str] = "current"
+BASELINE_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    "cpu",
+    "memory",
+    "in_rate",
+    "out_rate",
+    "error_rate",
+)
+F2_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    "cpu",
+    "memory",
+    "in_rate",
+    "out_rate",
+    "error_rate",
+    "utilization_in_pct",
+    "utilization_out_pct",
+    "discard_rate_in",
+    "discard_rate_out",
+    "packet_rate_in",
+    "packet_rate_out",
+    "in_out_ratio",
+    "interface_oper_status",
+    "interface_admin_status",
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +108,14 @@ class ProjectPaths:
         return self.outputs_dir / f"{self.artifact_dir.name}_p1_baseline_metrics.json"
 
     @property
+    def p2_interface_capability_matrix_file(self) -> Path:
+        return self.outputs_dir / "p2_interface_capability_matrix.json"
+
+    @property
+    def p2_extended_feature_schema_file(self) -> Path:
+        return self.outputs_dir / "p2_extended_feature_schema.json"
+
+    @property
     def legacy_scaler_file(self) -> Path:
         return self.utils_dir / "scaler.pkl"
 
@@ -126,18 +157,21 @@ class ProjectPaths:
 @dataclass(frozen=True)
 class FeatureEngineeringConfig:
     sequence_length: int = 10
-    feature_columns: tuple[str, ...] = (
-        "cpu",
-        "memory",
-        "in_rate",
-        "out_rate",
-        "error_rate",
-    )
+    feature_columns: tuple[str, ...] = BASELINE_FEATURE_COLUMNS
     train_split: float = 0.8
     normal_label: int = 0
     save_scaler: bool = True
     scaler_name: str = "minmax"
     log1p_features: tuple[str, ...] = ()
+
+
+def feature_columns_for_profile(profile_name: str) -> tuple[str, ...]:
+    normalized_name = profile_name.strip().lower()
+    if normalized_name == "baseline":
+        return BASELINE_FEATURE_COLUMNS
+    if normalized_name == "f2":
+        return F2_FEATURE_COLUMNS
+    raise ValueError("Unsupported feature profile. Expected `baseline` or `f2`.")
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,8 @@ import pandas as pd
 
 
 GROUP_KEYS = ("device_id", "interface")
+EPSILON = 1e-9
+STATUS_DEFAULT_UP = 1.0
 
 
 def _resolve_group_keys(dataframe: pd.DataFrame) -> list[str]:
@@ -15,6 +17,67 @@ def _resolve_group_keys(dataframe: pd.DataFrame) -> list[str]:
     if "interface" in dataframe.columns:
         keys.append("interface")
     return keys
+
+
+def _resolve_numeric_series(
+    dataframe: pd.DataFrame,
+    aliases: tuple[str, ...],
+    default_value: float | None = None,
+) -> pd.Series:
+    for column_name in aliases:
+        if column_name in dataframe.columns:
+            return pd.to_numeric(dataframe[column_name], errors="coerce")
+    if default_value is None:
+        return pd.Series(np.nan, index=dataframe.index, dtype=float)
+    return pd.Series(default_value, index=dataframe.index, dtype=float)
+
+
+def _derive_counter_rate(
+    grouped,
+    source_series: pd.Series,
+    elapsed_seconds: pd.Series,
+    counter_reset_flag: pd.Series,
+) -> pd.Series:
+    deltas = grouped[source_series.name].diff() if source_series.name in grouped.obj.columns else source_series.groupby(grouped.grouper).diff()
+    invalid_mask = (
+        elapsed_seconds.isna()
+        | (elapsed_seconds <= 0)
+        | source_series.isna()
+        | deltas.isna()
+        | (deltas < 0)
+        | (counter_reset_flag == 1)
+    )
+    safe_elapsed = elapsed_seconds.where(~invalid_mask)
+    safe_deltas = deltas.where(~invalid_mask)
+    return (safe_deltas / safe_elapsed).fillna(0.0)
+
+
+def _derive_counter_rate_from_column(
+    dataframe: pd.DataFrame,
+    grouped,
+    source_column: str,
+    elapsed_seconds: pd.Series,
+    counter_reset_flag: pd.Series,
+) -> pd.Series:
+    source_series = pd.to_numeric(dataframe[source_column], errors="coerce")
+    deltas = grouped[source_column].diff()
+    invalid_mask = (
+        elapsed_seconds.isna()
+        | (elapsed_seconds <= 0)
+        | source_series.isna()
+        | deltas.isna()
+        | (deltas < 0)
+        | (counter_reset_flag == 1)
+    )
+    safe_elapsed = elapsed_seconds.where(~invalid_mask)
+    safe_deltas = deltas.where(~invalid_mask)
+    return (safe_deltas / safe_elapsed).fillna(0.0)
+
+
+def _derive_utilization(rate_series: pd.Series, interface_speed_mbps: pd.Series) -> pd.Series:
+    speed_bps = interface_speed_mbps * 1_000_000.0
+    valid_speed = speed_bps.where(speed_bps > 0)
+    return ((rate_series * 8.0) / valid_speed * 100.0).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 
 def derive_rate_features_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -26,26 +89,110 @@ def derive_rate_features_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
     grouped = derived.groupby(group_keys, dropna=False)
     elapsed_seconds = grouped["timestamp"].diff().dt.total_seconds()
     counter_reset_flag = (
-        derived["counter_reset"].fillna(0).astype(int)
+        pd.to_numeric(derived["counter_reset"], errors="coerce").fillna(0).astype(int)
         if "counter_reset" in derived.columns
         else pd.Series(0, index=derived.index, dtype=int)
     )
 
-    for source_column, feature_name in (
+    base_counter_columns = (
         ("in_octets", "in_rate"),
         ("out_octets", "out_rate"),
         ("errors", "error_rate"),
-    ):
-        deltas = grouped[source_column].diff()
-        invalid_mask = (elapsed_seconds.isna()) | (elapsed_seconds <= 0) | (deltas < 0) | (
-            counter_reset_flag == 1
+    )
+    for source_column, feature_name in base_counter_columns:
+        derived[feature_name] = _derive_counter_rate_from_column(
+            dataframe=derived,
+            grouped=grouped,
+            source_column=source_column,
+            elapsed_seconds=elapsed_seconds,
+            counter_reset_flag=counter_reset_flag,
         )
-        safe_elapsed = elapsed_seconds.where(~invalid_mask)
-        safe_deltas = deltas.where(~invalid_mask)
-        derived[feature_name] = (safe_deltas / safe_elapsed).fillna(0.0)
 
-    derived["cpu"] = derived["cpu"].astype(float)
-    derived["memory"] = derived["memory"].astype(float)
+    packet_in_column = next(
+        (column_name for column_name in ("in_ucast_pkts", "packets_in") if column_name in derived.columns),
+        None,
+    )
+    packet_out_column = next(
+        (column_name for column_name in ("out_ucast_pkts", "packets_out") if column_name in derived.columns),
+        None,
+    )
+    discard_in_column = next(
+        (column_name for column_name in ("in_discards", "discard_in") if column_name in derived.columns),
+        None,
+    )
+    discard_out_column = next(
+        (column_name for column_name in ("out_discards", "discard_out") if column_name in derived.columns),
+        None,
+    )
+
+    derived["packet_rate_in"] = (
+        _derive_counter_rate_from_column(
+            dataframe=derived,
+            grouped=grouped,
+            source_column=packet_in_column,
+            elapsed_seconds=elapsed_seconds,
+            counter_reset_flag=counter_reset_flag,
+        )
+        if packet_in_column is not None
+        else pd.Series(0.0, index=derived.index, dtype=float)
+    )
+    derived["packet_rate_out"] = (
+        _derive_counter_rate_from_column(
+            dataframe=derived,
+            grouped=grouped,
+            source_column=packet_out_column,
+            elapsed_seconds=elapsed_seconds,
+            counter_reset_flag=counter_reset_flag,
+        )
+        if packet_out_column is not None
+        else pd.Series(0.0, index=derived.index, dtype=float)
+    )
+    derived["discard_rate_in"] = (
+        _derive_counter_rate_from_column(
+            dataframe=derived,
+            grouped=grouped,
+            source_column=discard_in_column,
+            elapsed_seconds=elapsed_seconds,
+            counter_reset_flag=counter_reset_flag,
+        )
+        if discard_in_column is not None
+        else pd.Series(0.0, index=derived.index, dtype=float)
+    )
+    derived["discard_rate_out"] = (
+        _derive_counter_rate_from_column(
+            dataframe=derived,
+            grouped=grouped,
+            source_column=discard_out_column,
+            elapsed_seconds=elapsed_seconds,
+            counter_reset_flag=counter_reset_flag,
+        )
+        if discard_out_column is not None
+        else pd.Series(0.0, index=derived.index, dtype=float)
+    )
+
+    interface_speed_mbps = _resolve_numeric_series(
+        derived,
+        ("interface_speed_mbps", "interface_speed", "if_speed"),
+        default_value=0.0,
+    )
+    derived["utilization_in_pct"] = _derive_utilization(derived["in_rate"], interface_speed_mbps)
+    derived["utilization_out_pct"] = _derive_utilization(derived["out_rate"], interface_speed_mbps)
+    derived["in_out_ratio"] = (
+        derived["in_rate"] / np.maximum(derived["out_rate"].to_numpy(dtype=float), EPSILON)
+    )
+    derived["interface_speed_mbps"] = interface_speed_mbps.fillna(0.0)
+    derived["interface_admin_status"] = _resolve_numeric_series(
+        derived,
+        ("interface_admin_status",),
+        default_value=STATUS_DEFAULT_UP,
+    ).fillna(STATUS_DEFAULT_UP)
+    derived["interface_oper_status"] = _resolve_numeric_series(
+        derived,
+        ("interface_oper_status",),
+        default_value=STATUS_DEFAULT_UP,
+    ).fillna(STATUS_DEFAULT_UP)
+    derived["cpu"] = pd.to_numeric(derived["cpu"], errors="coerce").fillna(0.0)
+    derived["memory"] = pd.to_numeric(derived["memory"], errors="coerce").fillna(0.0)
     derived["analysis_scope"] = (
         "per_interface" if "interface" in derived.columns else "per_device"
     )
@@ -73,7 +220,6 @@ class OnlineRateFeatureBuilder:
             return None
 
         key = self._build_key(event)
-        previous = self._previous_by_key.get(key)
         current = {
             "timestamp": event_time,
             "device_id": str(event.device_id),
@@ -83,16 +229,39 @@ class OnlineRateFeatureBuilder:
             "in_octets": float(event.in_octets),
             "out_octets": float(event.out_octets),
             "errors": float(event.errors),
+            "in_ucast_pkts": None if getattr(event, "in_ucast_pkts", None) is None else float(event.in_ucast_pkts),
+            "out_ucast_pkts": None if getattr(event, "out_ucast_pkts", None) is None else float(event.out_ucast_pkts),
+            "in_discards": None if getattr(event, "in_discards", None) is None else float(event.in_discards),
+            "out_discards": None if getattr(event, "out_discards", None) is None else float(event.out_discards),
+            "interface_speed_mbps": None
+            if getattr(event, "interface_speed_mbps", None) is None
+            else float(event.interface_speed_mbps),
+            "interface_admin_status": float(
+                getattr(event, "interface_admin_status", STATUS_DEFAULT_UP)
+                if getattr(event, "interface_admin_status", None) is not None
+                else STATUS_DEFAULT_UP
+            ),
+            "interface_oper_status": float(
+                getattr(event, "interface_oper_status", STATUS_DEFAULT_UP)
+                if getattr(event, "interface_oper_status", None) is not None
+                else STATUS_DEFAULT_UP
+            ),
+            "counter_reset": int(getattr(event, "counter_reset", 0) or 0),
             "anomaly": int(getattr(event, "anomaly", 0)),
             "analysis_scope": "per_interface" if key[1] else "per_device",
         }
 
+        previous = self._previous_by_key.get(key)
         self._previous_by_key[key] = current
         if previous is None:
             return None
 
         elapsed_seconds = float((event_time - previous["timestamp"]).total_seconds())
         if elapsed_seconds <= 0:
+            return None
+
+        if current["counter_reset"] == 1:
+            current["reset_detected"] = 1
             return None
 
         in_delta = current["in_octets"] - previous["in_octets"]
@@ -105,6 +274,36 @@ class OnlineRateFeatureBuilder:
         current["in_rate"] = in_delta / elapsed_seconds
         current["out_rate"] = out_delta / elapsed_seconds
         current["error_rate"] = error_delta / elapsed_seconds
+
+        for source_name, feature_name in (
+            ("in_ucast_pkts", "packet_rate_in"),
+            ("out_ucast_pkts", "packet_rate_out"),
+            ("in_discards", "discard_rate_in"),
+            ("out_discards", "discard_rate_out"),
+        ):
+            current_value = current[source_name]
+            previous_value = previous.get(source_name)
+            if current_value is None or previous_value is None:
+                current[feature_name] = 0.0
+                continue
+            delta = current_value - previous_value
+            if delta < 0:
+                current["reset_detected"] = 1
+                return None
+            current[feature_name] = delta / elapsed_seconds
+
+        interface_speed_mbps = current["interface_speed_mbps"] or 0.0
+        if interface_speed_mbps > 0:
+            current["utilization_in_pct"] = (current["in_rate"] * 8.0) / (
+                interface_speed_mbps * 1_000_000.0
+            ) * 100.0
+            current["utilization_out_pct"] = (current["out_rate"] * 8.0) / (
+                interface_speed_mbps * 1_000_000.0
+            ) * 100.0
+        else:
+            current["utilization_in_pct"] = 0.0
+            current["utilization_out_pct"] = 0.0
+        current["in_out_ratio"] = current["in_rate"] / max(current["out_rate"], EPSILON)
         current["elapsed_seconds"] = elapsed_seconds
         current["reset_detected"] = 0
         return OnlineDerivedRecord(record=current)

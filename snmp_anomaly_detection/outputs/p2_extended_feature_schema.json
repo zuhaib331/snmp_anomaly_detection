@@ -27,13 +27,21 @@
   "current_live_input_schema": {
     "normalized_event_fields": [
       "anomaly",
+      "counter_reset",
       "cpu",
       "device_id",
       "errors",
+      "in_discards",
       "in_octets",
+      "in_ucast_pkts",
       "interface",
+      "interface_admin_status",
+      "interface_oper_status",
+      "interface_speed_mbps",
       "memory",
+      "out_discards",
       "out_octets",
+      "out_ucast_pkts",
       "timestamp"
     ],
     "kafka_required_fields": [
@@ -47,15 +55,7 @@
       "errors"
     ]
   },
-  "required_live_input_additions_for_f2": [
-    "interface_speed_mbps",
-    "in_ucast_pkts",
-    "out_ucast_pkts",
-    "in_discards",
-    "out_discards",
-    "interface_admin_status",
-    "interface_oper_status"
-  ],
+  "required_live_input_additions_for_f2": [],
   "extended_interface_row_schema": [
     {
       "field_name": "interface_speed_mbps",
@@ -71,7 +71,7 @@
         "if_speed"
       ],
       "required_in_live_event": true,
-      "currently_in_live_event_schema": false,
+      "currently_in_live_event_schema": true,
       "notes": "Must be positive for safe utilization calculations."
     },
     {
@@ -86,7 +86,7 @@
         "packets_in"
       ],
       "required_in_live_event": true,
-      "currently_in_live_event_schema": false,
+      "currently_in_live_event_schema": true,
       "notes": "Cumulative counter; derive rate per device_id + interface."
     },
     {
@@ -101,7 +101,7 @@
         "packets_out"
       ],
       "required_in_live_event": true,
-      "currently_in_live_event_schema": false,
+      "currently_in_live_event_schema": true,
       "notes": "Cumulative counter; derive rate per device_id + interface."
     },
     {
@@ -116,7 +116,7 @@
         "discard_in"
       ],
       "required_in_live_event": true,
-      "currently_in_live_event_schema": false,
+      "currently_in_live_event_schema": true,
       "notes": "Cumulative counter; derive rate per device_id + interface."
     },
     {
@@ -131,7 +131,7 @@
         "discard_out"
       ],
       "required_in_live_event": true,
-      "currently_in_live_event_schema": false,
+      "currently_in_live_event_schema": true,
       "notes": "Cumulative counter; derive rate per device_id + interface."
     },
     {
@@ -145,7 +145,7 @@
         "interface_admin_status"
       ],
       "required_in_live_event": true,
-      "currently_in_live_event_schema": false,
+      "currently_in_live_event_schema": true,
       "notes": "Preserve as raw state value for explanation and optional training use."
     },
     {
@@ -159,7 +159,7 @@
         "interface_oper_status"
       ],
       "required_in_live_event": true,
-      "currently_in_live_event_schema": false,
+      "currently_in_live_event_schema": true,
       "notes": "Preserve as raw state value for explanation and optional training use."
     },
     {
@@ -273,7 +273,7 @@
     "Offline and live paths must derive the same F2 features from the same source columns.",
     "Per-interface remains the default path; use per-device only when the required interface-level fields are missing.",
     "Current synthetic data has full source-field coverage for every stream in the baseline dataset.",
-    "F2 still requires live event schema expansion because the current NormalizedEvent and Kafka input contract only cover F1-era fields."
+    "Current live event and Kafka payload schemas now include the source fields needed for F2 feature derivation."
   ],
   "capability_summary": {
     "row_count": 30000,

@@ -47,6 +47,16 @@ REQUIRED_KAFKA_FIELDS: tuple[str, ...] = (
     "out_octets",
     "errors",
 )
+OPTIONAL_NUMERIC_KAFKA_FIELDS: tuple[str, ...] = (
+    "in_ucast_pkts",
+    "out_ucast_pkts",
+    "in_discards",
+    "out_discards",
+    "interface_speed_mbps",
+    "interface_admin_status",
+    "interface_oper_status",
+    "counter_reset",
+)
 
 
 def _require_kafka() -> None:
@@ -102,6 +112,16 @@ def validate_kafka_payload(payload: Any) -> KafkaValidationResult:
         except Exception:
             errors.append(f"`{field_name}` is invalid")
 
+    for field_name in OPTIONAL_NUMERIC_KAFKA_FIELDS:
+        if field_name not in payload or payload[field_name] is None:
+            continue
+        try:
+            value = float(payload[field_name])
+            if pd.isna(value):
+                errors.append(f"`{field_name}` is invalid")
+        except Exception:
+            errors.append(f"`{field_name}` is invalid")
+
     return KafkaValidationResult(
         is_valid=not errors,
         errors=tuple(errors),
@@ -123,6 +143,34 @@ def normalize_kafka_payload(payload: dict[str, Any]) -> NormalizedEvent:
         in_octets=float(payload["in_octets"]),
         out_octets=float(payload["out_octets"]),
         errors=float(payload["errors"]),
+        in_ucast_pkts=(
+            None if payload.get("in_ucast_pkts") is None else float(payload["in_ucast_pkts"])
+        ),
+        out_ucast_pkts=(
+            None if payload.get("out_ucast_pkts") is None else float(payload["out_ucast_pkts"])
+        ),
+        in_discards=(
+            None if payload.get("in_discards") is None else float(payload["in_discards"])
+        ),
+        out_discards=(
+            None if payload.get("out_discards") is None else float(payload["out_discards"])
+        ),
+        interface_speed_mbps=(
+            None
+            if payload.get("interface_speed_mbps") is None
+            else float(payload["interface_speed_mbps"])
+        ),
+        interface_admin_status=(
+            None
+            if payload.get("interface_admin_status") is None
+            else int(float(payload["interface_admin_status"]))
+        ),
+        interface_oper_status=(
+            None
+            if payload.get("interface_oper_status") is None
+            else int(float(payload["interface_oper_status"]))
+        ),
+        counter_reset=int(float(payload.get("counter_reset", 0) or 0)),
         anomaly=int(payload.get("anomaly", 0)),
     )
 

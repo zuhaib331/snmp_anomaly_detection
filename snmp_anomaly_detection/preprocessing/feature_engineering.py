@@ -14,6 +14,7 @@ from snmp_anomaly_detection.config import (
     EvaluationConfig,
     FeatureEngineeringConfig,
     ProjectPaths,
+    feature_columns_for_profile,
 )
 from snmp_anomaly_detection.evaluation.time_split import (
     TimeSplitDefinition,
@@ -40,6 +41,7 @@ class FeatureEngineeringArtifacts:
 @dataclass(frozen=True)
 class PreprocessingMetadata:
     split_definition: TimeSplitDefinition
+    feature_columns: tuple[str, ...]
     scaler_name: str
     log1p_features: tuple[str, ...]
     train_row_count: int
@@ -161,6 +163,7 @@ def build_preprocessing_metadata(
     normal_split_counts = normal_labeled_frame["split"].value_counts().to_dict()
     return PreprocessingMetadata(
         split_definition=split_definition,
+        feature_columns=tuple(config.feature_columns),
         scaler_name=config.scaler_name,
         log1p_features=tuple(config.log1p_features),
         train_row_count=int(split_counts.get("train", 0)),
@@ -255,11 +258,18 @@ def main() -> None:
         type=int,
         help="Sliding window length used for sequence generation.",
     )
+    parser.add_argument(
+        "--feature-profile",
+        choices=("baseline", "f2"),
+        default="baseline",
+        help="Named feature set to use during preprocessing.",
+    )
     args = parser.parse_args()
 
     default_config = FeatureEngineeringConfig()
     config = FeatureEngineeringConfig(
         sequence_length=args.sequence_length or default_config.sequence_length,
+        feature_columns=feature_columns_for_profile(args.feature_profile),
         scaler_name=args.scaler_name or default_config.scaler_name,
         log1p_features=tuple(args.log1p_features)
         if args.log1p_features is not None
@@ -274,6 +284,7 @@ def main() -> None:
     print(f"X_train shape: {artifacts.x_train.shape}")
     print(f"X_test shape: {artifacts.x_test.shape}")
     print(f"Artifact directory: {paths.artifact_dir}")
+    print(f"Feature profile: {args.feature_profile}")
     print(f"Scaler: {paths.scaler_file}")
     print(f"Preprocessing metadata: {paths.preprocessing_metadata_file}")
 
