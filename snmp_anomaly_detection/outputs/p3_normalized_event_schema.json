@@ -1,0 +1,113 @@
+{
+  "stage": "P3",
+  "schema_version": "p3_normalized_event_v1",
+  "status": "completed",
+  "event_schema": [
+    {
+      "field_name": "timestamp",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "notes": "ISO-like timestamp parsed with the same pandas timestamp parser used for SNMP rows."
+    },
+    {
+      "field_name": "device_id",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "notes": "Primary device matching key."
+    },
+    {
+      "field_name": "interface",
+      "dtype": "string",
+      "required": false,
+      "nullable": true,
+      "notes": "Preferred second matching key when present."
+    },
+    {
+      "field_name": "analysis_scope",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "allowed_values": [
+        "per_interface",
+        "per_device"
+      ],
+      "notes": "Preserves whether correlation should use device+interface or device-only matching."
+    },
+    {
+      "field_name": "source_type",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "allowed_values": [
+        "snmp_trap_interface_state",
+        "synthetic_snmp_trap_interface_state"
+      ],
+      "notes": "Identifies the external evidence family."
+    },
+    {
+      "field_name": "event_type",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "allowed_values": [
+        "interface_down",
+        "interface_up",
+        "admin_down",
+        "oper_down",
+        "link_flap",
+        "counter_reset",
+        "device_reboot",
+        "high_error_rate",
+        "unknown_event"
+      ],
+      "notes": "Standard event type for deterministic downstream correlation."
+    },
+    {
+      "field_name": "severity",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "allowed_values": [
+        "info",
+        "warning",
+        "critical"
+      ],
+      "notes": "Normalized operational severity."
+    },
+    {
+      "field_name": "message",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "notes": "Human-readable explanation of the normalized event."
+    },
+    {
+      "field_name": "extra",
+      "dtype": "object",
+      "required": true,
+      "nullable": false,
+      "notes": "Source-specific fields retained for auditability."
+    }
+  ],
+  "matching_key_policy": {
+    "preferred": [
+      "device_id",
+      "interface"
+    ],
+    "fallback": [
+      "device_id"
+    ],
+    "fallback_condition": "Use device-only matching when interface is missing or empty."
+  },
+  "timestamp_policy": {
+    "parser": "pandas.to_datetime(errors='coerce')",
+    "timezone_assumption": "same timezone as the SNMP dataset unless the event source explicitly provides one",
+    "malformed_or_missing_timestamp_action": "reject during C1 normalization"
+  },
+  "draft_c2_correlation_window": {
+    "lookback_minutes_before_anomaly_window_end": 10,
+    "lookahead_minutes_after_anomaly_window_end": 5
+  }
+}

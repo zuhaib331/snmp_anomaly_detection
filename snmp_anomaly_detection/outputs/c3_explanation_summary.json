@@ -1,0 +1,49 @@
+{
+  "stage": "C3",
+  "status": "completed",
+  "correlated_anomaly_windows_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c2_correlated_anomaly_windows.json",
+  "output_files": {
+    "explained_anomaly_windows": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c3_explained_anomaly_windows.json",
+    "explanation_summary": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c3_explanation_summary.json"
+  },
+  "input_counts": {
+    "correlated_anomaly_window_count": 1581
+  },
+  "explanation_counts": {
+    "explained_anomaly_window_count": 1581,
+    "with_correlated_event": 254,
+    "model_only": 1327
+  },
+  "confidence_counts": {
+    "high": 142,
+    "low": 1350,
+    "medium": 89
+  },
+  "explanation_type_counts": {
+    "correlated_event": 254,
+    "model_only": 1327
+  },
+  "top_error_feature_counts": {
+    "discard_rate_in": 293,
+    "in_out_ratio": 271,
+    "in_rate_zscore": 198,
+    "error_rate": 195,
+    "out_rate_zscore": 171,
+    "utilization_in_pct_zscore": 144,
+    "discard_rate_out": 104,
+    "burst_indicator": 65,
+    "utilization_out_pct_zscore": 39,
+    "utilization_in_pct": 28
+  },
+  "related_event_type_counts": {
+    "high_error_rate": 153,
+    "interface_down": 76,
+    "interface_up": 25
+  },
+  "explanation_policy": {
+    "method": "deterministic post-processing of C2 correlation output",
+    "certainty_rule": "uses likely-related wording and preserves raw C2 evidence",
+    "high_confidence_min_correlation_score": 150,
+    "medium_confidence_min_correlation_score": 120
+  }
+}

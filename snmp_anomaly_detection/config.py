@@ -30,6 +30,22 @@ F2_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "interface_oper_status",
     "interface_admin_status",
 )
+F3_CONTEXT_BASE_FEATURES: Final[tuple[str, ...]] = (
+    "in_rate",
+    "out_rate",
+    "error_rate",
+    "utilization_in_pct",
+    "utilization_out_pct",
+)
+F3_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    *F2_FEATURE_COLUMNS,
+    *tuple(
+        f"{feature_name}_{stat_name}"
+        for feature_name in F3_CONTEXT_BASE_FEATURES
+        for stat_name in ("rolling_mean", "rolling_std", "zscore", "trend")
+    ),
+    "burst_indicator",
+)
 
 
 @dataclass(frozen=True)
@@ -116,6 +132,50 @@ class ProjectPaths:
         return self.outputs_dir / "p2_extended_feature_schema.json"
 
     @property
+    def p3_event_source_selection_file(self) -> Path:
+        return self.outputs_dir / "p3_event_source_selection.json"
+
+    @property
+    def p3_normalized_event_schema_file(self) -> Path:
+        return self.outputs_dir / "p3_normalized_event_schema.json"
+
+    @property
+    def p3_timestamp_alignment_notes_file(self) -> Path:
+        return self.outputs_dir / "p3_timestamp_alignment_notes.json"
+
+    @property
+    def p3_sample_normalized_events_file(self) -> Path:
+        return self.outputs_dir / "p3_sample_normalized_events.jsonl"
+
+    @property
+    def c1_normalized_events_file(self) -> Path:
+        return self.outputs_dir / "c1_normalized_events.jsonl"
+
+    @property
+    def c1_rejected_events_file(self) -> Path:
+        return self.outputs_dir / "c1_rejected_events.jsonl"
+
+    @property
+    def c1_normalization_summary_file(self) -> Path:
+        return self.outputs_dir / "c1_normalization_summary.json"
+
+    @property
+    def c2_correlated_anomaly_windows_file(self) -> Path:
+        return self.outputs_dir / "c2_correlated_anomaly_windows.json"
+
+    @property
+    def c2_correlation_summary_file(self) -> Path:
+        return self.outputs_dir / "c2_correlation_summary.json"
+
+    @property
+    def c3_explained_anomaly_windows_file(self) -> Path:
+        return self.outputs_dir / "c3_explained_anomaly_windows.json"
+
+    @property
+    def c3_explanation_summary_file(self) -> Path:
+        return self.outputs_dir / "c3_explanation_summary.json"
+
+    @property
     def legacy_scaler_file(self) -> Path:
         return self.utils_dir / "scaler.pkl"
 
@@ -171,7 +231,9 @@ def feature_columns_for_profile(profile_name: str) -> tuple[str, ...]:
         return BASELINE_FEATURE_COLUMNS
     if normalized_name == "f2":
         return F2_FEATURE_COLUMNS
-    raise ValueError("Unsupported feature profile. Expected `baseline` or `f2`.")
+    if normalized_name == "f3":
+        return F3_FEATURE_COLUMNS
+    raise ValueError("Unsupported feature profile. Expected `baseline`, `f2`, or `f3`.")
 
 
 @dataclass(frozen=True)

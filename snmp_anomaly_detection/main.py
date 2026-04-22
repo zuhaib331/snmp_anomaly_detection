@@ -3,8 +3,12 @@ from __future__ import annotations
 import argparse
 import sys
 
+from snmp_anomaly_detection.data.c1_event_normalization import main as normalize_events_main
+from snmp_anomaly_detection.data.c2_event_correlation import main as correlate_events_main
+from snmp_anomaly_detection.data.c3_explanation import main as explain_anomalies_main
 from snmp_anomaly_detection.data.dataset_builder import main as build_dataset_main
 from snmp_anomaly_detection.data.p2_feature_readiness import main as report_p2_main
+from snmp_anomaly_detection.data.p3_event_readiness import main as report_p3_main
 from snmp_anomaly_detection.evaluation.p1_1_comparison import main as compare_p1_main
 from snmp_anomaly_detection.evaluation.p1_baseline import main as evaluate_p1_main
 from snmp_anomaly_detection.inference.csv_replay import main as detect_csv_main
@@ -31,6 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
             "train",
             "evaluate-baseline",
             "compare-artifacts",
+            "report-p3",
+            "normalize-events",
+            "correlate-events",
+            "explain-anomalies",
             "detect",
             "detect-csv",
             "detect-kafka-dry",
@@ -64,6 +72,14 @@ def main() -> None:
         evaluate_p1_main()
     elif args.step == "compare-artifacts":
         compare_p1_main()
+    elif args.step == "report-p3":
+        report_p3_main()
+    elif args.step == "normalize-events":
+        normalize_events_main()
+    elif args.step == "correlate-events":
+        correlate_events_main()
+    elif args.step == "explain-anomalies":
+        explain_anomalies_main()
     elif args.step == "detect":
         detect_main()
     elif args.step == "detect-csv":

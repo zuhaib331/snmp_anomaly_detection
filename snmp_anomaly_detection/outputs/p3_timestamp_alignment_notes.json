@@ -1,0 +1,33 @@
+{
+  "stage": "P3",
+  "status": "completed",
+  "dataset_path": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/data/synthetic_snmp_dataset.csv",
+  "timestamp_parser": "pandas.to_datetime(errors='coerce')",
+  "timezone_assumption": "same timezone as the SNMP dataset; synthetic source timestamps are naive like the SNMP rows",
+  "snmp_timestamp_quality": {
+    "row_count": 30000,
+    "valid_timestamp_rows": 30000,
+    "invalid_timestamp_rows": 0,
+    "timestamp_min": "2025-01-01 00:00:00",
+    "timestamp_max": "2025-01-07 22:35:00",
+    "common_poll_interval_seconds": 300.0
+  },
+  "sample_event_timestamp_quality": {
+    "sample_event_count": 100,
+    "valid_event_timestamp_count": 100,
+    "aligned_to_snmp_poll_timestamp_count": 100,
+    "alignment_ratio": 1.0
+  },
+  "matching_key_quality": {
+    "events_with_device_id": 100,
+    "events_with_interface": 100,
+    "per_interface_event_ratio": 1.0,
+    "fallback_policy": "Use device_id only when interface is missing."
+  },
+  "c1_rejection_policy_preview": {
+    "missing_or_malformed_timestamp": "reject",
+    "missing_device_id": "reject",
+    "missing_interface": "keep with analysis_scope=per_device",
+    "unknown_event_type": "map to unknown_event"
+  }
+}

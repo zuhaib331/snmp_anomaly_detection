@@ -1,0 +1,46 @@
+{
+  "stage": "C2",
+  "status": "completed",
+  "anomaly_windows_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/anomaly_windows.json",
+  "normalized_events_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c1_normalized_events.jsonl",
+  "output_files": {
+    "correlated_anomaly_windows": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c2_correlated_anomaly_windows.json",
+    "correlation_summary": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c2_correlation_summary.json"
+  },
+  "correlation_window": {
+    "anchor": "window_end",
+    "lookback_minutes": 10,
+    "lookahead_minutes": 5
+  },
+  "ranking_policy": {
+    "same_device_and_interface_score": 100,
+    "same_device_only_score": 60,
+    "severity_scores": {
+      "critical": 30,
+      "warning": 20,
+      "info": 10
+    },
+    "feature_related_event_bonus": 20,
+    "max_proximity_score": 20,
+    "max_events_per_anomaly": 5
+  },
+  "input_counts": {
+    "anomaly_window_count": 1581,
+    "normalized_event_count": 100,
+    "interface_event_key_count": 14,
+    "device_only_event_key_count": 0
+  },
+  "correlation_counts": {
+    "anomalies_with_correlated_events": 254,
+    "anomalies_without_correlated_events": 1327,
+    "selected_correlated_event_count": 329
+  },
+  "event_type_counts": {
+    "high_error_rate": 153,
+    "interface_down": 76,
+    "interface_up": 100
+  },
+  "match_scope_counts": {
+    "device_id+interface": 329
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "stage": "P3",
+  "status": "completed",
+  "selected_event_source": {
+    "source_type": "snmp_trap_interface_state",
+    "first_implementation_source_type": "synthetic_snmp_trap_interface_state",
+    "data_mode": "synthetic_from_existing_snmp_dataset",
+    "dataset_path": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/data/synthetic_snmp_dataset.csv",
+    "reason": "SNMP traps and interface state events naturally preserve device_id, often preserve interface, and explain link/state/reset/high-error causes."
+  },
+  "accepted_real_source_formats_for_c1": [
+    "csv",
+    "jsonl"
+  ],
+  "supported_standard_event_types": [
+    "interface_down",
+    "interface_up",
+    "admin_down",
+    "oper_down",
+    "link_flap",
+    "counter_reset",
+    "device_reboot",
+    "high_error_rate",
+    "unknown_event"
+  ],
+  "source_field_coverage": {
+    "timestamp": {
+      "present": true,
+      "required_for_p3": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0
+    },
+    "device_id": {
+      "present": true,
+      "required_for_p3": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0
+    },
+    "interface": {
+      "present": true,
+      "required_for_p3": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0
+    },
+    "interface_admin_status": {
+      "present": true,
+      "required_for_p3": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0
+    },
+    "interface_oper_status": {
+      "present": true,
+      "required_for_p3": true,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0
+    },
+    "anomaly_type": {
+      "present": true,
+      "required_for_p3": false,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0
+    },
+    "counter_reset": {
+      "present": true,
+      "required_for_p3": false,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0
+    },
+    "errors": {
+      "present": true,
+      "required_for_p3": false,
+      "non_null_rows": 30000,
+      "coverage_ratio": 1.0
+    }
+  },
+  "readiness": {
+    "usable_for_c1": true,
+    "missing_required_fields": [],
+    "device_id_available": true,
+    "interface_identifier_available": true,
+    "timestamp_available": true
+  },
+  "next_step": "Use this source selection and schema to implement C1 normalization."
+}

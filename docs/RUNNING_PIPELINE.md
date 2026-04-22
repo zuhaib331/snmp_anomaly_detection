@@ -1,15 +1,27 @@
 # Running the Project
 
-This document explains how to run the current SNMP anomaly detection pipeline after `P0` completion and `F1` implementation.
+This document explains how to run the current SNMP anomaly detection pipeline after `P0`, `F1`, `P2`, `F2`, `F3`, `P3`, `C1`, `C2`, and `C3` implementation.
 
-The current validated baseline is:
+The current recommended artifacts are:
+
+- official rich-feature baseline:
+  `f3_t3_seq10_p995_v1`
+- stable simple baseline:
+  `f1_baseline_v1`
+- low-noise rich-feature option:
+  `f3_t3_seq10_p999_v1`
+
+The official rich-feature baseline uses:
 - richer synthetic SNMP-like dataset
 - cumulative counters
 - interface-scoped windows
-- derived-rate feature set:
-  `cpu`, `memory`, `in_rate`, `out_rate`, `error_rate`
-- validated artifact directory:
-  `f1_baseline_v1`
+- `F3` feature profile with `35` features
+- threshold mode:
+  percentile `99.5`
+- recommended artifact directory:
+  `f3_t3_seq10_p995_v1`
+
+Keep `f1_baseline_v1` when you need the simpler historical `F1` baseline for comparison.
 
 ## 1. Environment Setup
 
@@ -40,10 +52,15 @@ Available steps:
 
 ```bash
 python3 main.py generate-data
+python3 main.py report-p2
 python3 main.py preprocess
 python3 main.py train
 python3 main.py evaluate-baseline
 python3 main.py compare-artifacts
+python3 main.py report-p3
+python3 main.py normalize-events
+python3 main.py correlate-events
+python3 main.py explain-anomalies
 python3 main.py detect
 python3 main.py detect-csv
 python3 main.py detect-kafka-dry
@@ -68,8 +85,7 @@ The current synthetic dataset now includes:
 - interface admin and oper status
 - anomaly metadata
 
-The active `F1` model does not use all columns yet.
-It currently trains on:
+The stable simple `F1` baseline trains on:
 
 - `cpu`
 - `memory`
@@ -78,6 +94,8 @@ It currently trains on:
 - `error_rate`
 
 These are derived during preprocessing from cumulative counters using elapsed time between polls.
+
+The official rich-feature baseline, `f3_t3_seq10_p995_v1`, uses the `F3` feature profile. It includes the `F2` interface-capacity and health features plus rolling context features for traffic, error, and utilization behavior.
 
 ## 4. Artifact Directory Concept
 
@@ -113,6 +131,22 @@ Current meaningful artifact directories:
   first `T2` log1p plus StandardScaler candidate
 - `t2_log1p_robust_v1`
   first `T2` log1p plus RobustScaler candidate
+- `f2_candidate_v1`
+  first `F2` candidate using richer interface-capacity and health features
+- `f2_t2_standard_v1`
+  `F2` candidate with StandardScaler
+- `f2_t2_robust_v1`
+  `F2` candidate with RobustScaler
+- `f2_t2_log1p_standard_v1`
+  `F2` candidate with log1p plus StandardScaler
+- `f2_t2_log1p_robust_v1`
+  `F2` candidate with log1p plus RobustScaler
+- `f3_candidate_v1`
+  first contextual rolling-feature candidate
+- `f3_t3_seq10_p995_v1`
+  official recommended rich-feature baseline
+- `f3_t3_seq10_p999_v1`
+  stricter low-noise rich-feature option
 
 Rule:
 - use the same artifact directory name for `preprocess`, `train`, and `detect` when they belong to the same run
@@ -128,8 +162,12 @@ Recommended git branch split:
 
 Recommended artifact split:
 
-- official current baseline:
+- official rich-feature baseline:
+  `f3_t3_seq10_p995_v1`
+- stable simple baseline:
   `f1_baseline_v1`
+- low-noise rich-feature option:
+  `f3_t3_seq10_p999_v1`
 - future demo artifact example:
   `boss_demo_approved_v1`
 - future experiment artifact example:
@@ -139,29 +177,52 @@ This gives two layers of safety:
 - branch keeps code stable
 - artifact directory keeps model and scaler stable
 
-## 6. Run The Current Validated F1 Baseline
+## 6. Run The Current Recommended Rich-Feature Baseline
 
 Run these commands in order from the project root:
 
 ```bash
 python3 main.py generate-data
+python3 main.py preprocess --artifact-dir-name f3_t3_seq10_p995_v1 --feature-profile f3
+python3 main.py train --artifact-dir-name f3_t3_seq10_p995_v1 --threshold-mode percentile --threshold-percentile 99.5
+python3 main.py detect --artifact-dir-name f3_t3_seq10_p995_v1
+python3 main.py evaluate-baseline --artifact-dir-name f3_t3_seq10_p995_v1
+python3 main.py report-p3
+python3 main.py normalize-events
+python3 main.py correlate-events
+python3 main.py explain-anomalies
+```
+
+This does the following:
+1. generates the richer synthetic SNMP dataset
+2. derives rate, interface-health, and contextual rolling features
+3. trains the LSTM autoencoder on the `F3` feature set
+4. runs anomaly detection using the same rich-feature artifact set
+5. saves the `P1` time split and baseline metrics report
+6. prepares the first event source for correlation
+7. normalizes event samples into the shared C1 schema
+8. correlates anomaly windows with nearby events
+9. adds deterministic C3 explanations to correlated anomaly windows
+
+To rerun the stable simple baseline instead, use:
+
+```bash
 python3 main.py preprocess --artifact-dir-name f1_baseline_v1
 python3 main.py train --artifact-dir-name f1_baseline_v1
 python3 main.py detect --artifact-dir-name f1_baseline_v1
 python3 main.py evaluate-baseline --artifact-dir-name f1_baseline_v1
 ```
 
-This does the following:
-1. generates the richer synthetic SNMP dataset
-2. derives rate features and saves arrays plus scaler
-3. trains the LSTM autoencoder on the `F1` feature set
-4. runs anomaly detection using the same validated artifact set
-5. saves the `P1` time split and baseline metrics report
-
 Optional candidate comparison, once candidate `P1` metrics reports already exist:
 
 ```bash
 python3 main.py compare-artifacts --baseline-artifact-dir-name f1_baseline_v1 --candidate-artifact-dir-name t1_candidate_v1 --candidate-artifact-dir-name t2_standard_v1 --candidate-artifact-dir-name t2_robust_v1 --candidate-artifact-dir-name t2_log1p_standard_v1 --candidate-artifact-dir-name t2_log1p_robust_v1
+```
+
+Current rich-feature comparison:
+
+```bash
+python3 main.py compare-artifacts --baseline-artifact-dir-name f1_baseline_v1 --candidate-artifact-dir-name f3_t3_seq10_p995_v1 --candidate-artifact-dir-name f3_t3_seq10_p999_v1
 ```
 
 ## 7. Run Each Step Separately
@@ -218,13 +279,25 @@ python3 main.py preprocess --artifact-dir-name t2_log1p_standard_v1 --scaler-nam
 python3 main.py preprocess --artifact-dir-name t2_log1p_robust_v1 --scaler-name robust --log1p-features in_rate out_rate error_rate
 ```
 
+Optional `F2` preprocessing examples:
+
+```bash
+python3 main.py preprocess --artifact-dir-name f2_candidate_v1 --feature-profile f2
+python3 main.py preprocess --artifact-dir-name f2_t2_standard_v1 --feature-profile f2 --scaler-name standard
+python3 main.py preprocess --artifact-dir-name f2_t2_robust_v1 --feature-profile f2 --scaler-name robust
+python3 main.py preprocess --artifact-dir-name f2_t2_log1p_standard_v1 --feature-profile f2 --scaler-name standard --log1p-features in_rate out_rate error_rate packet_rate_in packet_rate_out discard_rate_in discard_rate_out
+python3 main.py preprocess --artifact-dir-name f2_t2_log1p_robust_v1 --feature-profile f2 --scaler-name robust --log1p-features in_rate out_rate error_rate packet_rate_in packet_rate_out discard_rate_in discard_rate_out
+```
+
 What this step does:
 - loads the dataset
 - derives `in_rate`, `out_rate`, and `error_rate`
+- can also derive `F2` features such as utilization, packet/discard rates, `in_out_ratio`, and interface state values
 - builds a repeatable time-based train, validation, and test split
 - filters normal rows for training and test artifacts
 - skips invalid warm-up and reset rows
 - fits the scaler on train-period normal rows only
+- supports named feature profiles such as `baseline`, `f2`, and `f3`
 - can use `minmax`, `standard`, or `robust` scaling
 - can optionally apply `log1p` to selected heavy-tailed features before scaling
 - applies the saved scaler to both train and test periods
@@ -239,7 +312,29 @@ Outputs:
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/scaler.pkl`
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/preprocessing_metadata.json`
 
-### D. Train the `F1` model
+### D. Run `P2` feature readiness reporting
+
+```bash
+python3 main.py report-p2
+```
+
+What this step does:
+- scans the dataset for the richer interface-level source fields needed before `F2`
+- builds a capability matrix for each `device_id + interface` stream
+- documents whether `per-interface` can remain the main analysis scope
+- writes the extended feature schema note needed for `F2` and `F3`
+
+Outputs:
+- `snmp_anomaly_detection/outputs/p2_interface_capability_matrix.json`
+- `snmp_anomaly_detection/outputs/p2_extended_feature_schema.json`
+
+Current saved `P2` result:
+- all `15` streams have full source-field coverage
+- all `15` devices currently recommend `per_interface`
+- current live schema additions required for `F2`:
+  `none`
+
+### E. Train the `F1` model
 
 ```bash
 python3 main.py train --artifact-dir-name f1_baseline_v1
@@ -255,7 +350,7 @@ Outputs:
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/lstm_autoencoder.pth`
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/model_metadata.json`
 
-### E. Run anomaly detection
+### F. Run anomaly detection
 
 ```bash
 python3 main.py detect --artifact-dir-name f1_baseline_v1
@@ -288,7 +383,7 @@ Current validated result shape includes:
 - `feature_error_out_rate`
 - `feature_error_error_rate`
 
-### F. Run `P1` baseline evaluation
+### G. Run `P1` baseline evaluation
 
 ```bash
 python3 main.py evaluate-baseline --artifact-dir-name f1_baseline_v1
@@ -326,7 +421,7 @@ Current saved `P1` summary for `f1_baseline_v1`:
 - false positive rate:
   `0.0559`
 
-### G. Run `P1.1` artifact comparison
+### H. Run `P1.1` artifact comparison
 
 Run this after candidate artifacts already have saved `P1` metrics reports.
 The comparison step reads the existing `*_p1_baseline_metrics.json` files and does not rerun inference.
@@ -403,11 +498,166 @@ Current saved `P1.1` result:
   precision delta `-0.0103`, recall delta `-0.0036`, false positive rate delta `+0.0074`, recommendation `keep_baseline`
 
 Current decision:
-- keep `f1_baseline_v1` as the validated baseline
+- keep `f1_baseline_v1` as the stable simple baseline for historical comparison
+- use `f3_t3_seq10_p995_v1` as the official recommended rich-feature baseline
 - T2 metadata propagation is fixed for scaler and `log1p` tracking
-- move next toward `T3` threshold and windowing experiments
+- continue later experiments against the saved `P1` comparison workflow
 
-### H. Run Kafka dry ingestion
+### I. Run first `F2` candidate flow
+
+Run this after `P2` if you want to test the richer interface-capacity and health feature set.
+
+```bash
+python3 main.py preprocess --artifact-dir-name f2_candidate_v1 --feature-profile f2
+python3 main.py train --artifact-dir-name f2_candidate_v1
+python3 main.py evaluate-baseline --artifact-dir-name f2_candidate_v1
+python3 main.py compare-artifacts --baseline-artifact-dir-name f1_baseline_v1 --candidate-artifact-dir-name f2_candidate_v1
+```
+
+What this step does:
+- switches preprocessing from the `F1` baseline feature set to the richer `F2` feature profile
+- trains and evaluates one first `F2` candidate artifact
+- compares it directly against `f1_baseline_v1`
+
+Current saved `F2` candidate result:
+- `f2_candidate_v1`:
+  precision `0.0890`, recall `0.6137`, false positive rate `0.0589`
+- compared with `f1_baseline_v1`:
+  precision delta `-0.0033`, recall delta `+0.0072`, false positive rate delta `+0.0030`
+- current recommendation:
+  `review_tradeoff`
+
+Current saved `F2 + T2` comparison result:
+- `f2_t2_standard_v1`:
+  recommendation `keep_baseline`
+- `f2_t2_robust_v1`:
+  recommendation `keep_baseline`
+- `f2_t2_log1p_standard_v1`:
+  recommendation `review_tradeoff`
+- `f2_t2_log1p_robust_v1`:
+  recommendation `review_tradeoff`
+
+### J. Run `P3` event-source readiness reporting
+
+Run this after the dataset exists. It prepares the first event source for later C1/C2/C3 correlation work.
+
+```bash
+python3 main.py report-p3
+```
+
+What this step does:
+- selects SNMP traps / interface-state events as the first correlation source
+- writes the normalized event schema used by C1
+- checks timestamp alignment assumptions
+- generates a synthetic sample event JSONL file from the current SNMP dataset
+
+Outputs:
+- `snmp_anomaly_detection/outputs/p3_event_source_selection.json`
+- `snmp_anomaly_detection/outputs/p3_normalized_event_schema.json`
+- `snmp_anomaly_detection/outputs/p3_timestamp_alignment_notes.json`
+- `snmp_anomaly_detection/outputs/p3_sample_normalized_events.jsonl`
+
+### K. Run `C1` event normalization
+
+Run this after `P3`.
+
+```bash
+python3 main.py normalize-events
+```
+
+Optional real event input:
+
+```bash
+python3 main.py normalize-events --input-file path/to/events.jsonl
+python3 main.py normalize-events --input-file path/to/events.csv
+python3 main.py normalize-events --input-file path/to/events.json
+```
+
+What this step does:
+- reads CSV, JSON, or JSONL event records
+- normalizes event fields into the shared `P3` schema
+- maps source event names into standard event types
+- rejects malformed timestamps and missing `device_id` records safely
+- preserves `interface` when available and falls back to `per_device` scope when missing
+
+Outputs:
+- `snmp_anomaly_detection/outputs/c1_normalized_events.jsonl`
+- `snmp_anomaly_detection/outputs/c1_rejected_events.jsonl`
+- `snmp_anomaly_detection/outputs/c1_normalization_summary.json`
+
+### L. Run `C2` event correlation
+
+Run this after anomaly detection and C1 normalization.
+
+```bash
+python3 main.py correlate-events
+```
+
+Optional explicit inputs:
+
+```bash
+python3 main.py correlate-events --anomaly-windows-file snmp_anomaly_detection/outputs/anomaly_windows.json --normalized-events-file snmp_anomaly_detection/outputs/c1_normalized_events.jsonl
+```
+
+What this step does:
+- reads anomaly windows from detection
+- reads normalized C1 events
+- matches events around anomaly `window_end`
+- uses a deterministic `10` minute lookback and `5` minute lookahead window
+- ranks matches by device/interface match, proximity, severity, and top-feature relationship
+
+Outputs:
+- `snmp_anomaly_detection/outputs/c2_correlated_anomaly_windows.json`
+- `snmp_anomaly_detection/outputs/c2_correlation_summary.json`
+
+Current saved C2 result:
+- anomaly windows:
+  `1581`
+- anomalies with correlated events:
+  `254`
+- anomalies without correlated events:
+  `1327`
+- selected correlated events:
+  `329`
+
+### M. Run `C3` anomaly explanation
+
+Run this after C2.
+
+```bash
+python3 main.py explain-anomalies
+```
+
+Optional explicit input:
+
+```bash
+python3 main.py explain-anomalies --correlated-anomaly-windows-file snmp_anomaly_detection/outputs/c2_correlated_anomaly_windows.json
+```
+
+What this step does:
+- reads C2 correlated anomaly windows
+- adds one deterministic `c3_explanation` object per anomaly window
+- produces "likely related" explanations when a correlated event exists
+- produces model-only explanations when no event matched the C2 window
+- preserves the raw C2 evidence alongside the explanation
+
+Outputs:
+- `snmp_anomaly_detection/outputs/c3_explained_anomaly_windows.json`
+- `snmp_anomaly_detection/outputs/c3_explanation_summary.json`
+
+Current saved C3 result:
+- explained anomaly windows:
+  `1581`
+- event-backed explanations:
+  `254`
+- model-only explanations:
+  `1327`
+- high-confidence explanations:
+  `142`
+- medium-confidence explanations:
+  `89`
+
+### N. Run Kafka dry ingestion
 
 ```bash
 python3 main.py detect-kafka-dry
@@ -419,7 +669,7 @@ Notes:
 - does not perform anomaly scoring
 - stop with `Ctrl+C`
 
-### I. Publish Kafka test data
+### O. Publish Kafka test data
 
 ```bash
 python3 main.py produce-kafka-test-data
@@ -429,9 +679,10 @@ python3 main.py produce-kafka-test-data --max-messages 200 --anomaly-probability
 
 Notes:
 - the live synthetic Kafka producer now also includes `interface`
+- the live synthetic Kafka producer now also includes packet counters, discard counters, interface speed, and interface status
 - payloads use cumulative counters, matching the `F1` online-rate logic better than before
 
-### J. Run Kafka live detection
+### P. Run Kafka live detection
 
 ```bash
 python3 main.py detect-kafka --artifact-dir-name f1_baseline_v1
@@ -532,15 +783,23 @@ python3 main.py preprocess --artifact-dir-name f1_baseline_v1
 python3 main.py train --artifact-dir-name f1_baseline_v1
 python3 main.py detect --artifact-dir-name f1_baseline_v1
 python3 main.py evaluate-baseline --artifact-dir-name f1_baseline_v1
+python3 main.py report-p3
+python3 main.py normalize-events
+python3 main.py correlate-events
+python3 main.py explain-anomalies
 ```
 
-If detection completes successfully, check:
+If detection and explanation complete successfully, check:
 
 - `snmp_anomaly_detection/artifacts/f1_baseline_v1/`
 - `snmp_anomaly_detection/outputs/anomaly_results.csv`
 - `snmp_anomaly_detection/outputs/anomaly_windows.json`
 - `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_time_split.json`
 - `snmp_anomaly_detection/outputs/f1_baseline_v1_p1_baseline_metrics.json`
+- `snmp_anomaly_detection/outputs/c1_normalized_events.jsonl`
+- `snmp_anomaly_detection/outputs/c2_correlated_anomaly_windows.json`
+- `snmp_anomaly_detection/outputs/c3_explained_anomaly_windows.json`
+- `snmp_anomaly_detection/outputs/c3_explanation_summary.json`
 
 If candidate `P1` metrics reports already exist, also verify the comparison report:
 

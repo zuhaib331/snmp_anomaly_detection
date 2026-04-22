@@ -1,0 +1,59 @@
+{
+  "stage": "C1",
+  "schema_version": "p3_normalized_event_v1",
+  "status": "completed",
+  "input_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/p3_sample_normalized_events.jsonl",
+  "output_files": {
+    "normalized_events": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c1_normalized_events.jsonl",
+    "rejected_events": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c1_rejected_events.jsonl",
+    "normalization_summary": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/c1_normalization_summary.json"
+  },
+  "row_count": 100,
+  "normalized_event_count": 100,
+  "rejected_event_count": 0,
+  "event_type_counts": {
+    "high_error_rate": 50,
+    "interface_down": 25,
+    "interface_up": 25
+  },
+  "severity_counts": {
+    "critical": 25,
+    "info": 25,
+    "warning": 50
+  },
+  "analysis_scope_counts": {
+    "per_interface": 100
+  },
+  "rejection_reason_counts": {},
+  "deterministic_mapping": {
+    "accepted_input_formats": [
+      "csv",
+      "json",
+      "jsonl"
+    ],
+    "standard_event_types": [
+      "interface_down",
+      "interface_up",
+      "admin_down",
+      "oper_down",
+      "link_flap",
+      "counter_reset",
+      "device_reboot",
+      "high_error_rate",
+      "unknown_event"
+    ],
+    "severity_by_event_type": {
+      "interface_down": "critical",
+      "admin_down": "critical",
+      "oper_down": "critical",
+      "link_flap": "warning",
+      "counter_reset": "warning",
+      "device_reboot": "warning",
+      "high_error_rate": "warning",
+      "interface_up": "info",
+      "unknown_event": "warning"
+    },
+    "missing_interface_action": "keep with analysis_scope=per_device",
+    "unknown_event_action": "map to unknown_event"
+  }
+}
