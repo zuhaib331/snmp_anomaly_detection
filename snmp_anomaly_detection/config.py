@@ -112,6 +112,14 @@ class ProjectPaths:
         return self.artifact_dir / "model_metadata.json"
 
     @property
+    def iforest_model_file(self) -> Path:
+        return self.artifact_dir / "isolation_forest.pkl"
+
+    @property
+    def iforest_metadata_file(self) -> Path:
+        return self.artifact_dir / "isolation_forest_metadata.json"
+
+    @property
     def preprocessing_metadata_file(self) -> Path:
         return self.artifact_dir / "preprocessing_metadata.json"
 
@@ -122,6 +130,22 @@ class ProjectPaths:
     @property
     def p1_baseline_metrics_file(self) -> Path:
         return self.outputs_dir / f"{self.artifact_dir.name}_p1_baseline_metrics.json"
+
+    @property
+    def iforest_results_file(self) -> Path:
+        return self.outputs_dir / f"{self.artifact_dir.name}_iforest_results.csv"
+
+    @property
+    def iforest_anomaly_windows_file(self) -> Path:
+        return self.outputs_dir / f"{self.artifact_dir.name}_iforest_anomaly_windows.json"
+
+    @property
+    def iforest_p1_time_split_file(self) -> Path:
+        return self.outputs_dir / f"{self.artifact_dir.name}_iforest_p1_time_split.json"
+
+    @property
+    def iforest_p1_baseline_metrics_file(self) -> Path:
+        return self.outputs_dir / f"{self.artifact_dir.name}_iforest_p1_baseline_metrics.json"
 
     @property
     def p2_interface_capability_matrix_file(self) -> Path:
@@ -246,6 +270,15 @@ class TrainingConfig:
     threshold_mode: str = "stddev"
     threshold_std_multiplier: float = 3.0
     threshold_percentile: float = 99.5
+
+
+@dataclass(frozen=True)
+class IsolationForestConfig:
+    n_estimators: int = 300
+    contamination: float | str = 0.02
+    max_samples: str | int | float = "auto"
+    random_state: int = 42
+    n_jobs: int = -1
 
 
 @dataclass(frozen=True)

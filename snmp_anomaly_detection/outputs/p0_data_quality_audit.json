@@ -1,0 +1,30 @@
+{
+  "dataset_path": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/data/synthetic_snmp_dataset.csv",
+  "summary": {
+    "row_count": 30000,
+    "duplicate_row_count": 0,
+    "duplicate_key_count": 0,
+    "timestamp_parse_failures": 0,
+    "out_of_order_group_count": 0,
+    "groups_with_polling_gaps": 0,
+    "groups_with_irregular_intervals": 0
+  },
+  "required_missing_value_counts": {
+    "device_id": 0,
+    "timestamp": 0,
+    "interface": 0,
+    "in_octets": 0,
+    "out_octets": 0,
+    "errors": 0
+  },
+  "counter_negative_delta_counts": {
+    "in_octets": 0,
+    "out_octets": 0,
+    "errors": 0,
+    "in_ucast_pkts": 0,
+    "out_ucast_pkts": 0,
+    "in_discards": 0,
+    "out_discards": 0
+  },
+  "sample_group_issues": []
+}

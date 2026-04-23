@@ -42,8 +42,9 @@ Current project status in plain language:
 - `C1` is completed for SNMP trap / interface-state event normalization using the `P3` schema
 - `C2` is completed for deterministic matching between anomaly windows and normalized events
 - `C3` is completed for deterministic explanation output from C2 correlated anomalies
-- the next recommended work is to add Isolation Forest as a separate experimental model baseline under `T4`, not as an immediate replacement for the LSTM path
-- any LSTM + Isolation Forest ensemble should wait until Isolation Forest has its own repeatable metrics report
+- `T4` first Isolation Forest baseline has been implemented as a standalone experiment
+- `iforest_f3_v1` is not promoted over the LSTM rich-feature baseline because recall is much lower
+- any LSTM + Isolation Forest ensemble should wait until more T4 tuning or comparison shows that Isolation Forest adds useful complementary signal
 
 Current recommended artifacts:
 
@@ -365,17 +366,18 @@ This is the simplest view of the roadmap:
 - `C1`: completed; normalized SNMP trap / interface-state samples into the `P3` shared schema and emits rejected-event records
 - `C2`: completed; correlated anomaly windows with normalized `C1` events using a deterministic time/key/score policy
 - `C3`: completed; added deterministic explanation output after `C2`
-- `T4`: planned next; compare model baselines, including Isolation Forest, using the same feature set and time split
+- `T4`: first Isolation Forest baseline completed; `iforest_f3_v1` is not promoted over `f3_t3_seq10_p995_v1`
 
 ## What We Should Do Next
 
 The next best step is:
 
-- implement Isolation Forest as a separate `T4` experimental baseline and compare it against the LSTM reports
 - keep `f3_t3_seq10_p995_v1` as the official recommended rich-feature baseline
 - keep `f1_baseline_v1` as the stable simple baseline for historical comparison
 - keep `f3_t3_seq10_p999_v1` as the low-noise rich-feature option
-- only consider combined LSTM + Isolation Forest alerting after the standalone Isolation Forest metrics are saved and reviewed
+- keep `iforest_f3_v1` as a completed standalone T4 reference, not a replacement
+- if continuing T4, try Isolation Forest tuning or another model baseline only as a separate experiment
+- only consider combined LSTM + Isolation Forest alerting after a tuned Isolation Forest or another T4 model shows useful complementary metrics
 - then validate explanations against real known-normal and maintenance-labeled data when available
 
 Optional alternate next step:
@@ -1088,8 +1090,43 @@ Acceptance criteria:
 
 Current status:
 
-- planned after `C3`
-- Isolation Forest is not yet implemented
+- first Isolation Forest baseline completed
+- current artifact:
+  `iforest_f3_v1`
+- source artifact:
+  `f3_t3_seq10_p995_v1`
+
+Current `iforest_f3_v1` result:
+
+- evaluated windows:
+  `29850`
+- predicted anomalies:
+  `811`
+- true positives:
+  `17`
+- false positives:
+  `794`
+- precision:
+  `0.0210`
+- recall:
+  `0.0614`
+- false positive rate:
+  `0.0268`
+
+Comparison against `f3_t3_seq10_p995_v1`:
+
+- predicted anomalies decreased by `1005`
+- false positives decreased by `840`
+- true positives decreased by `165`
+- precision decreased from `0.1002` to `0.0210`
+- recall decreased from `0.6570` to `0.0614`
+
+Current recommendation:
+
+- do not promote `iforest_f3_v1`
+- keep `f3_t3_seq10_p995_v1` as the official rich-feature baseline
+- treat Isolation Forest as a quiet but low-recall reference baseline
+- do not ensemble yet
 
 ## Correlation Roadmap
 

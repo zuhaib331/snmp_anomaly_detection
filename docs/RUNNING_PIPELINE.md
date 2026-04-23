@@ -55,13 +55,16 @@ python3 main.py generate-data
 python3 main.py report-p2
 python3 main.py preprocess
 python3 main.py train
+python3 main.py train-iforest
 python3 main.py evaluate-baseline
+python3 main.py evaluate-iforest
 python3 main.py compare-artifacts
 python3 main.py report-p3
 python3 main.py normalize-events
 python3 main.py correlate-events
 python3 main.py explain-anomalies
 python3 main.py detect
+python3 main.py detect-iforest
 python3 main.py detect-csv
 python3 main.py detect-kafka-dry
 python3 main.py detect-kafka
@@ -657,7 +660,56 @@ Current saved C3 result:
 - medium-confidence explanations:
   `89`
 
-### N. Run Kafka dry ingestion
+### N. Run `T4` Isolation Forest baseline
+
+Run this after the source feature/preprocessing artifact exists. The current recommended source artifact is `f3_t3_seq10_p995_v1`.
+
+```bash
+python3 main.py train-iforest --artifact-dir-name iforest_f3_v1 --source-artifact-dir-name f3_t3_seq10_p995_v1
+python3 main.py detect-iforest --artifact-dir-name iforest_f3_v1
+python3 main.py evaluate-iforest --artifact-dir-name iforest_f3_v1
+```
+
+What this step does:
+- trains Isolation Forest on the same F3 engineered sequence windows used by the LSTM baseline
+- flattens each `sequence_length x feature_count` window into one tabular vector
+- saves a standalone Isolation Forest artifact
+- replays the CSV input through the same feature/window construction path
+- writes standalone scoring output and P1-style metrics
+
+Outputs:
+- `snmp_anomaly_detection/artifacts/iforest_f3_v1/isolation_forest.pkl`
+- `snmp_anomaly_detection/artifacts/iforest_f3_v1/isolation_forest_metadata.json`
+- `snmp_anomaly_detection/outputs/iforest_f3_v1_iforest_results.csv`
+- `snmp_anomaly_detection/outputs/iforest_f3_v1_iforest_anomaly_windows.json`
+- `snmp_anomaly_detection/outputs/iforest_f3_v1_iforest_p1_time_split.json`
+- `snmp_anomaly_detection/outputs/iforest_f3_v1_iforest_p1_baseline_metrics.json`
+
+Current saved T4 result:
+- source artifact:
+  `f3_t3_seq10_p995_v1`
+- Isolation Forest artifact:
+  `iforest_f3_v1`
+- training windows:
+  `20648`
+- evaluated windows:
+  `29850`
+- predicted anomaly windows:
+  `811`
+- precision:
+  `0.0210`
+- recall:
+  `0.0614`
+- false positive rate:
+  `0.0268`
+
+Current interpretation:
+- Isolation Forest is much quieter than the LSTM baseline
+- it misses most labeled anomalies in the current synthetic dataset
+- do not replace `f3_t3_seq10_p995_v1` with `iforest_f3_v1`
+- do not build an LSTM + Isolation Forest ensemble until more T4 tuning or comparison is done
+
+### O. Run Kafka dry ingestion
 
 ```bash
 python3 main.py detect-kafka-dry
@@ -669,7 +721,7 @@ Notes:
 - does not perform anomaly scoring
 - stop with `Ctrl+C`
 
-### O. Publish Kafka test data
+### P. Publish Kafka test data
 
 ```bash
 python3 main.py produce-kafka-test-data
@@ -682,7 +734,7 @@ Notes:
 - the live synthetic Kafka producer now also includes packet counters, discard counters, interface speed, and interface status
 - payloads use cumulative counters, matching the `F1` online-rate logic better than before
 
-### P. Run Kafka live detection
+### Q. Run Kafka live detection
 
 ```bash
 python3 main.py detect-kafka --artifact-dir-name f1_baseline_v1

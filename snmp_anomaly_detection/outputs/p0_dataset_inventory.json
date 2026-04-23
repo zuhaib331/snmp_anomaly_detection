@@ -1,0 +1,181 @@
+{
+  "dataset_path": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/data/synthetic_snmp_dataset.csv",
+  "summary": {
+    "row_count": 30000,
+    "column_count": 20,
+    "device_count": 15,
+    "interface_count": 4,
+    "timestamp_min": "2025-01-01 00:00:00",
+    "timestamp_max": "2025-01-07 22:35:00",
+    "per_interface_ready_devices": 15,
+    "per_device_fallback_devices": 0
+  },
+  "columns": {
+    "available": [
+      "timestamp",
+      "device_id",
+      "vendor",
+      "device_type",
+      "interface",
+      "cpu",
+      "memory",
+      "in_octets",
+      "out_octets",
+      "errors",
+      "in_ucast_pkts",
+      "out_ucast_pkts",
+      "in_discards",
+      "out_discards",
+      "interface_speed_mbps",
+      "interface_admin_status",
+      "interface_oper_status",
+      "anomaly",
+      "anomaly_type",
+      "counter_reset"
+    ],
+    "missing_required": [],
+    "available_optional": [
+      "cpu",
+      "memory",
+      "vendor",
+      "device_type",
+      "interface_speed_mbps",
+      "interface_admin_status",
+      "interface_oper_status",
+      "in_ucast_pkts",
+      "out_ucast_pkts",
+      "in_discards",
+      "out_discards",
+      "anomaly_type",
+      "counter_reset",
+      "anomaly"
+    ]
+  },
+  "feature_readiness": {
+    "can_derive_in_rate": true,
+    "can_derive_out_rate": true,
+    "can_derive_error_rate": true
+  },
+  "device_inventory": [
+    {
+      "device_id": "dev_0",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_1",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_10",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_11",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_12",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_13",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_14",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_2",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_3",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_4",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_5",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_6",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_7",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_8",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    },
+    {
+      "device_id": "dev_9",
+      "row_count": 2000,
+      "interface_count": 1,
+      "missing_interface_rows": 0,
+      "has_timestamp_gaps": false,
+      "recommended_scope": "per_interface"
+    }
+  ]
+}

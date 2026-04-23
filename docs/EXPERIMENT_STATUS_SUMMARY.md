@@ -6,13 +6,22 @@ This document explains, in simple words, what we have tried so far and which mod
 
 Recommended default model setup:
 
-- keep `f1_baseline_v1` as the main validated baseline
+- use `f3_t3_seq10_p995_v1` as the official recommended rich-feature baseline
 
 Why:
 
-- it still gives the best overall balance among all tested experiments
-- many candidates improved one metric, but usually made false positives much worse
-- no candidate clearly improved precision, recall, and false positive rate at the same time
+- it is feature-rich and improves precision, recall, and false positive rate versus `f1_baseline_v1`
+- it adds `14` true positives while reducing false positives by `19`
+- it keeps total predicted anomalies nearly flat:
+  `1821` for `f1_baseline_v1` versus `1816` for `f3_t3_seq10_p995_v1`
+
+Stable simple baseline:
+
+- keep `f1_baseline_v1` as the historical/simple comparison baseline
+
+Low-noise rich-feature option:
+
+- use `f3_t3_seq10_p999_v1` if the priority is fewer false positives
 
 Best `T3` review candidate if we want a stricter alert policy:
 
@@ -27,8 +36,9 @@ Why:
 
 Simple decision:
 
-- choose `f1_baseline_v1` if we want the safest balanced default
-- review `t3_seq10_std3_5_v1` if we want fewer false alarms and can accept slightly lower recall
+- choose `f3_t3_seq10_p995_v1` for the best balanced rich-feature setup
+- choose `f3_t3_seq10_p999_v1` if lower alert noise matters more than recall gain
+- use `f1_baseline_v1` only when you need the simpler historical baseline
 
 ## What The Project Uses
 
@@ -36,8 +46,12 @@ Across these experiments, the main model type is still the same:
 
 - model:
   LSTM autoencoder
-- active features:
+- stable simple baseline features:
   `cpu`, `memory`, `in_rate`, `out_rate`, `error_rate`
+- official rich-feature baseline:
+  `f3_t3_seq10_p995_v1`
+- official rich-feature profile:
+  `F3`, with `35` features
 - dataset:
   synthetic SNMP dataset with interface-level rolling windows
 
@@ -70,7 +84,65 @@ Simple reading:
 
 - catches a useful number of anomalies
 - still has too many false positives
-- remains the best balanced default among the tested runs
+- remains the stable simple baseline, but is no longer the official recommended rich-feature setup
+
+## Official Rich-Feature Baseline: `f3_t3_seq10_p995_v1`
+
+Artifact:
+
+- `f3_t3_seq10_p995_v1`
+
+What it is:
+
+- the best balanced rich-feature model so far
+- uses the `F3` feature profile with interface health, utilization, packet/discard rates, rolling context, z-scores, trends, and burst indication
+- uses sequence length `10`
+- uses percentile threshold `99.5`
+
+Overall metrics:
+
+| Artifact | Precision | Recall | False Positive Rate | False Positives | True Positives |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `f3_t3_seq10_p995_v1` | `0.1002` | `0.6570` | `0.0553` | `1634` | `182` |
+
+Compared with `f1_baseline_v1`:
+
+- precision improved from `0.0923` to `0.1002`
+- recall improved from `0.6065` to `0.6570`
+- false positive rate improved from `0.0559` to `0.0553`
+- false positives decreased from `1653` to `1634`
+- true positives increased from `168` to `182`
+
+Decision:
+
+- make this the official recommended rich-feature baseline
+
+## Low-Noise Rich-Feature Option: `f3_t3_seq10_p999_v1`
+
+Artifact:
+
+- `f3_t3_seq10_p999_v1`
+
+What it is:
+
+- the stricter rich-feature option when fewer false positives matter most
+- uses the same `F3` feature profile, but with percentile threshold `99.9`
+
+Overall metrics:
+
+| Artifact | Precision | Recall | False Positive Rate | False Positives | True Positives |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `f3_t3_seq10_p999_v1` | `0.1075` | `0.6137` | `0.0477` | `1411` | `170` |
+
+Compared with `f1_baseline_v1`:
+
+- precision improved from `0.0923` to `0.1075`
+- recall improved slightly from `0.6065` to `0.6137`
+- false positives dropped from `1653` to `1411`
+
+Decision:
+
+- use this when the priority is lowest alert noise, not maximum recall
 
 ## `T1`: Cleaner Training And Time-Based Evaluation
 
@@ -390,16 +462,12 @@ Why:
 
 ## Suggested Next Practical Step
 
-Use one of these two paths:
+Use this path:
 
-- keep `f1_baseline_v1` as the validated production-style baseline and continue with later roadmap work
-- or run a focused follow-up around `t3_seq10_std3_5_v1` and `t3_seq10_p999_v1` if the current priority is to reduce alert noise
+- treat `f3_t3_seq10_p995_v1` as the official recommended rich-feature baseline
+- keep `f1_baseline_v1` as the stable simple comparison baseline
+- start `P3` event-source selection for correlation
 
-If we do more `T3` work, the best next comparison set is:
+If alert-noise reduction is the main priority, use:
 
-- `sequence_length = 10`
-- threshold rules around:
-  `stddev 3.25`, `stddev 3.5`, `stddev 3.75`
-- percentile rules around:
-  `99.7`, `99.8`, `99.9`
-
+- `f3_t3_seq10_p999_v1`

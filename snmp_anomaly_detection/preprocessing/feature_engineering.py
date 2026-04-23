@@ -260,7 +260,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--feature-profile",
-        choices=("baseline", "f2"),
+        choices=("baseline", "f2", "f3"),
         default="baseline",
         help="Named feature set to use during preprocessing.",
     )

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.codex
+.codex/
+snmp_anomaly_detection/artifacts/
+snmp_anomaly_detection/outputs/demo/
+snmp_anomaly_detection/outputs/*_iforest_results.csv
+snmp_anomaly_detection/outputs/*_iforest_anomaly_windows.json
+snmp_anomaly_detection/outputs/kafka_live_results.jsonl
+snmp_anomaly_detection/outputs/kafka_live_anomaly_windows.jsonl
+featureEngineering/

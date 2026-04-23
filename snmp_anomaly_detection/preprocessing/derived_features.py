@@ -10,6 +10,14 @@ import pandas as pd
 GROUP_KEYS = ("device_id", "interface")
 EPSILON = 1e-9
 STATUS_DEFAULT_UP = 1.0
+ROLLING_CONTEXT_WINDOW = 12
+F3_CONTEXT_BASE_FEATURES = (
+    "in_rate",
+    "out_rate",
+    "error_rate",
+    "utilization_in_pct",
+    "utilization_out_pct",
+)
 
 
 def _resolve_group_keys(dataframe: pd.DataFrame) -> list[str]:
@@ -78,6 +86,44 @@ def _derive_utilization(rate_series: pd.Series, interface_speed_mbps: pd.Series)
     speed_bps = interface_speed_mbps * 1_000_000.0
     valid_speed = speed_bps.where(speed_bps > 0)
     return ((rate_series * 8.0) / valid_speed * 100.0).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+
+def _add_contextual_rolling_features(
+    dataframe: pd.DataFrame,
+    group_keys: list[str],
+    rolling_window: int = ROLLING_CONTEXT_WINDOW,
+) -> pd.DataFrame:
+    enriched = dataframe.copy()
+    grouped = enriched.groupby(group_keys, dropna=False)
+
+    for feature_name in F3_CONTEXT_BASE_FEATURES:
+        history = grouped[feature_name].shift(1)
+        rolling = history.groupby([enriched[key] for key in group_keys], dropna=False)
+        rolling_mean = rolling.transform(
+            lambda values: values.rolling(rolling_window, min_periods=2).mean()
+        )
+        rolling_std = rolling.transform(
+            lambda values: values.rolling(rolling_window, min_periods=2).std()
+        )
+        previous_value = grouped[feature_name].shift(1)
+        safe_std = rolling_std.where(rolling_std > EPSILON)
+
+        enriched[f"{feature_name}_rolling_mean"] = rolling_mean.fillna(0.0)
+        enriched[f"{feature_name}_rolling_std"] = rolling_std.fillna(0.0)
+        enriched[f"{feature_name}_zscore"] = (
+            ((enriched[feature_name] - rolling_mean) / safe_std)
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(0.0)
+        )
+        enriched[f"{feature_name}_trend"] = (
+            enriched[feature_name] - previous_value
+        ).fillna(0.0)
+
+    zscore_columns = [f"{feature_name}_zscore" for feature_name in F3_CONTEXT_BASE_FEATURES]
+    enriched["burst_indicator"] = (
+        enriched[zscore_columns].abs().max(axis=1) >= 3.0
+    ).astype(float)
+    return enriched
 
 
 def derive_rate_features_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -198,6 +244,7 @@ def derive_rate_features_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
     )
     derived["reset_detected"] = counter_reset_flag.astype(int)
     derived["elapsed_seconds"] = elapsed_seconds.fillna(0.0)
+    derived = _add_contextual_rolling_features(derived, group_keys=group_keys)
     return derived
 
 
@@ -209,6 +256,7 @@ class OnlineDerivedRecord:
 class OnlineRateFeatureBuilder:
     def __init__(self) -> None:
         self._previous_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        self._history_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     def _build_key(self, event: Any) -> tuple[str, str]:
         interface = getattr(event, "interface", None)
@@ -306,4 +354,44 @@ class OnlineRateFeatureBuilder:
         current["in_out_ratio"] = current["in_rate"] / max(current["out_rate"], EPSILON)
         current["elapsed_seconds"] = elapsed_seconds
         current["reset_detected"] = 0
+        history = self._history_by_key.setdefault(key, [])
+        self._add_online_contextual_features(current, history)
+        history.append(current.copy())
+        if len(history) > ROLLING_CONTEXT_WINDOW:
+            del history[:-ROLLING_CONTEXT_WINDOW]
         return OnlineDerivedRecord(record=current)
+
+    def _add_online_contextual_features(
+        self,
+        current: dict[str, Any],
+        history: list[dict[str, Any]],
+    ) -> None:
+        for feature_name in F3_CONTEXT_BASE_FEATURES:
+            previous_values = [
+                float(record.get(feature_name, 0.0))
+                for record in history[-ROLLING_CONTEXT_WINDOW:]
+            ]
+            current_value = float(current.get(feature_name, 0.0))
+
+            if len(previous_values) >= 2:
+                mean_value = float(np.mean(previous_values))
+                std_value = float(np.std(previous_values, ddof=1))
+            else:
+                mean_value = 0.0
+                std_value = 0.0
+
+            previous_value = previous_values[-1] if previous_values else current_value
+            zscore = (current_value - mean_value) / std_value if std_value > EPSILON else 0.0
+
+            current[f"{feature_name}_rolling_mean"] = mean_value
+            current[f"{feature_name}_rolling_std"] = std_value
+            current[f"{feature_name}_zscore"] = zscore
+            current[f"{feature_name}_trend"] = current_value - previous_value
+
+        current["burst_indicator"] = float(
+            max(
+                abs(float(current[f"{feature_name}_zscore"]))
+                for feature_name in F3_CONTEXT_BASE_FEATURES
+            )
+            >= 3.0
+        )

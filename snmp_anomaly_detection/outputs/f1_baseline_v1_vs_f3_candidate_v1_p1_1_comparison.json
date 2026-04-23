@@ -1,0 +1,524 @@
+{
+  "stage": "P1.1",
+  "created_at_utc": "2026-04-21T06:30:04+00:00",
+  "baseline_artifact": "f1_baseline_v1",
+  "baseline_metrics_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/f1_baseline_v1_p1_baseline_metrics.json",
+  "baseline_artifact_metadata": {
+    "artifact_dir": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/artifacts/f1_baseline_v1",
+    "model_metadata_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/artifacts/f1_baseline_v1/model_metadata.json",
+    "model_metadata_exists": true,
+    "preprocessing_metadata_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/artifacts/f1_baseline_v1/preprocessing_metadata.json",
+    "preprocessing_metadata_exists": false,
+    "model_scaler_name": null,
+    "preprocessing_scaler_name": null,
+    "model_log1p_features": null,
+    "preprocessing_log1p_features": null,
+    "consistency_warnings": []
+  },
+  "candidate_artifacts": [
+    "f3_candidate_v1"
+  ],
+  "comparison_notes": [
+    "Deltas are candidate minus baseline.",
+    "Positive precision and recall deltas are better.",
+    "Negative false_positive_rate and false_positive deltas are better.",
+    "Interface highlights use the top interface summaries saved in P1 reports."
+  ],
+  "comparisons": [
+    {
+      "candidate_artifact": "f3_candidate_v1",
+      "candidate_metrics_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/outputs/f3_candidate_v1_p1_baseline_metrics.json",
+      "artifact_metadata": {
+        "artifact_dir": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/artifacts/f3_candidate_v1",
+        "model_metadata_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/artifacts/f3_candidate_v1/model_metadata.json",
+        "model_metadata_exists": true,
+        "preprocessing_metadata_file": "/home/aircod/gitlab/SNMP-DATA/Dataset_creation/snmp_anomaly_detection/artifacts/f3_candidate_v1/preprocessing_metadata.json",
+        "preprocessing_metadata_exists": true,
+        "model_scaler_name": "minmax",
+        "preprocessing_scaler_name": "minmax",
+        "model_log1p_features": [],
+        "preprocessing_log1p_features": [],
+        "consistency_warnings": []
+      },
+      "overall_delta": {
+        "window_count": {
+          "baseline": 29850,
+          "candidate": 29850,
+          "delta": 0
+        },
+        "actual_anomalies": {
+          "baseline": 277,
+          "candidate": 277,
+          "delta": 0
+        },
+        "predicted_anomalies": {
+          "baseline": 1821,
+          "candidate": 2102,
+          "delta": 281
+        },
+        "true_positive": {
+          "baseline": 168,
+          "candidate": 189,
+          "delta": 21
+        },
+        "true_negative": {
+          "baseline": 27920,
+          "candidate": 27660,
+          "delta": -260
+        },
+        "false_positive": {
+          "baseline": 1653,
+          "candidate": 1913,
+          "delta": 260
+        },
+        "false_negative": {
+          "baseline": 109,
+          "candidate": 88,
+          "delta": -21
+        },
+        "precision": {
+          "baseline": 0.09225700164744646,
+          "candidate": 0.08991436726926737,
+          "delta": -0.0023426343781790954
+        },
+        "recall": {
+          "baseline": 0.6064981949458483,
+          "candidate": 0.6823104693140795,
+          "delta": 0.07581227436823113
+        },
+        "false_positive_rate": {
+          "baseline": 0.05589558042809319,
+          "candidate": 0.06468738376221553,
+          "delta": 0.008791803334122335
+        },
+        "predicted_anomaly_rate": {
+          "baseline": 0.06100502512562814,
+          "candidate": 0.07041876046901173,
+          "delta": 0.009413735343383592
+        }
+      },
+      "split_deltas": {
+        "test": {
+          "window_count": {
+            "baseline": 4500,
+            "candidate": 4500,
+            "delta": 0
+          },
+          "actual_anomalies": {
+            "baseline": 44,
+            "candidate": 44,
+            "delta": 0
+          },
+          "predicted_anomalies": {
+            "baseline": 198,
+            "candidate": 286,
+            "delta": 88
+          },
+          "true_positive": {
+            "baseline": 19,
+            "candidate": 27,
+            "delta": 8
+          },
+          "true_negative": {
+            "baseline": 4277,
+            "candidate": 4197,
+            "delta": -80
+          },
+          "false_positive": {
+            "baseline": 179,
+            "candidate": 259,
+            "delta": 80
+          },
+          "false_negative": {
+            "baseline": 25,
+            "candidate": 17,
+            "delta": -8
+          },
+          "precision": {
+            "baseline": 0.09595959595959595,
+            "candidate": 0.0944055944055944,
+            "delta": -0.0015540015540015523
+          },
+          "recall": {
+            "baseline": 0.4318181818181818,
+            "candidate": 0.6136363636363636,
+            "delta": 0.18181818181818182
+          },
+          "false_positive_rate": {
+            "baseline": 0.0401705565529623,
+            "candidate": 0.058123877917414725,
+            "delta": 0.017953321364452428
+          },
+          "predicted_anomaly_rate": {
+            "baseline": 0.044,
+            "candidate": 0.06355555555555556,
+            "delta": 0.019555555555555562
+          }
+        },
+        "train": {
+          "window_count": {
+            "baseline": 20850,
+            "candidate": 20850,
+            "delta": 0
+          },
+          "actual_anomalies": {
+            "baseline": 185,
+            "candidate": 185,
+            "delta": 0
+          },
+          "predicted_anomalies": {
+            "baseline": 1346,
+            "candidate": 1431,
+            "delta": 85
+          },
+          "true_positive": {
+            "baseline": 121,
+            "candidate": 126,
+            "delta": 5
+          },
+          "true_negative": {
+            "baseline": 19440,
+            "candidate": 19360,
+            "delta": -80
+          },
+          "false_positive": {
+            "baseline": 1225,
+            "candidate": 1305,
+            "delta": 80
+          },
+          "false_negative": {
+            "baseline": 64,
+            "candidate": 59,
+            "delta": -5
+          },
+          "precision": {
+            "baseline": 0.08989598811292719,
+            "candidate": 0.0880503144654088,
+            "delta": -0.0018456736475183921
+          },
+          "recall": {
+            "baseline": 0.654054054054054,
+            "candidate": 0.6810810810810811,
+            "delta": 0.027027027027027084
+          },
+          "false_positive_rate": {
+            "baseline": 0.05927897411081539,
+            "candidate": 0.06315025405274619,
+            "delta": 0.0038712799419307956
+          },
+          "predicted_anomaly_rate": {
+            "baseline": 0.06455635491606715,
+            "candidate": 0.06863309352517985,
+            "delta": 0.004076738609112701
+          }
+        },
+        "validation": {
+          "window_count": {
+            "baseline": 4500,
+            "candidate": 4500,
+            "delta": 0
+          },
+          "actual_anomalies": {
+            "baseline": 48,
+            "candidate": 48,
+            "delta": 0
+          },
+          "predicted_anomalies": {
+            "baseline": 277,
+            "candidate": 385,
+            "delta": 108
+          },
+          "true_positive": {
+            "baseline": 28,
+            "candidate": 36,
+            "delta": 8
+          },
+          "true_negative": {
+            "baseline": 4203,
+            "candidate": 4103,
+            "delta": -100
+          },
+          "false_positive": {
+            "baseline": 249,
+            "candidate": 349,
+            "delta": 100
+          },
+          "false_negative": {
+            "baseline": 20,
+            "candidate": 12,
+            "delta": -8
+          },
+          "precision": {
+            "baseline": 0.10108303249097472,
+            "candidate": 0.09350649350649351,
+            "delta": -0.0075765389844812125
+          },
+          "recall": {
+            "baseline": 0.5833333333333334,
+            "candidate": 0.75,
+            "delta": 0.16666666666666663
+          },
+          "false_positive_rate": {
+            "baseline": 0.05592991913746631,
+            "candidate": 0.07839173405211142,
+            "delta": 0.022461814914645106
+          },
+          "predicted_anomaly_rate": {
+            "baseline": 0.06155555555555556,
+            "candidate": 0.08555555555555555,
+            "delta": 0.023999999999999994
+          }
+        }
+      },
+      "interface_false_positive_highlights": {
+        "comparison_scope": "saved top_interfaces_by_false_positives lists",
+        "scope_note": "This compares the top interface summaries saved in each P1 report. It is not a full per-interface recomputation from raw replay rows.",
+        "largest_false_positive_regressions": [
+          {
+            "interface_key": "dev_14::eth3",
+            "device_id": "dev_14",
+            "interface": "eth3",
+            "baseline_false_positive": 0,
+            "candidate_false_positive": 139,
+            "false_positive_delta": 139,
+            "baseline_predicted_anomalies": 0,
+            "candidate_predicted_anomalies": 153,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": null
+          },
+          {
+            "interface_key": "dev_5::eth0",
+            "device_id": "dev_5",
+            "interface": "eth0",
+            "baseline_false_positive": 0,
+            "candidate_false_positive": 123,
+            "false_positive_delta": 123,
+            "baseline_predicted_anomalies": 0,
+            "candidate_predicted_anomalies": 134,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": null
+          },
+          {
+            "interface_key": "dev_9::eth2",
+            "device_id": "dev_9",
+            "interface": "eth2",
+            "baseline_false_positive": 0,
+            "candidate_false_positive": 113,
+            "false_positive_delta": 113,
+            "baseline_predicted_anomalies": 0,
+            "candidate_predicted_anomalies": 124,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": null
+          },
+          {
+            "interface_key": "dev_7::eth1",
+            "device_id": "dev_7",
+            "interface": "eth1",
+            "baseline_false_positive": 127,
+            "candidate_false_positive": 164,
+            "false_positive_delta": 37,
+            "baseline_predicted_anomalies": 140,
+            "candidate_predicted_anomalies": 180,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_6::eth2",
+            "device_id": "dev_6",
+            "interface": "eth2",
+            "baseline_false_positive": 194,
+            "candidate_false_positive": 229,
+            "false_positive_delta": 35,
+            "baseline_predicted_anomalies": 214,
+            "candidate_predicted_anomalies": 250,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_10::eth0",
+            "device_id": "dev_10",
+            "interface": "eth0",
+            "baseline_false_positive": 132,
+            "candidate_false_positive": 161,
+            "false_positive_delta": 29,
+            "baseline_predicted_anomalies": 148,
+            "candidate_predicted_anomalies": 181,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_1::eth2",
+            "device_id": "dev_1",
+            "interface": "eth2",
+            "baseline_false_positive": 95,
+            "candidate_false_positive": 116,
+            "false_positive_delta": 21,
+            "baseline_predicted_anomalies": 105,
+            "candidate_predicted_anomalies": 125,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_12::eth3",
+            "device_id": "dev_12",
+            "interface": "eth3",
+            "baseline_false_positive": 133,
+            "candidate_false_positive": 147,
+            "false_positive_delta": 14,
+            "baseline_predicted_anomalies": 147,
+            "candidate_predicted_anomalies": 161,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_2::eth0",
+            "device_id": "dev_2",
+            "interface": "eth0",
+            "baseline_false_positive": 125,
+            "candidate_false_positive": 126,
+            "false_positive_delta": 1,
+            "baseline_predicted_anomalies": 137,
+            "candidate_predicted_anomalies": 137,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_3::eth3",
+            "device_id": "dev_3",
+            "interface": "eth3",
+            "baseline_false_positive": 137,
+            "candidate_false_positive": 125,
+            "false_positive_delta": -12,
+            "baseline_predicted_anomalies": 152,
+            "candidate_predicted_anomalies": 139,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          }
+        ],
+        "largest_false_positive_improvements": [
+          {
+            "interface_key": "dev_8::eth0",
+            "device_id": "dev_8",
+            "interface": "eth0",
+            "baseline_false_positive": 110,
+            "candidate_false_positive": 0,
+            "false_positive_delta": -110,
+            "baseline_predicted_anomalies": 121,
+            "candidate_predicted_anomalies": 0,
+            "candidate_top_error_feature": null,
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_11::eth3",
+            "device_id": "dev_11",
+            "interface": "eth3",
+            "baseline_false_positive": 107,
+            "candidate_false_positive": 0,
+            "false_positive_delta": -107,
+            "baseline_predicted_anomalies": 116,
+            "candidate_predicted_anomalies": 0,
+            "candidate_top_error_feature": null,
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_4::eth0",
+            "device_id": "dev_4",
+            "interface": "eth0",
+            "baseline_false_positive": 102,
+            "candidate_false_positive": 0,
+            "false_positive_delta": -102,
+            "baseline_predicted_anomalies": 110,
+            "candidate_predicted_anomalies": 0,
+            "candidate_top_error_feature": null,
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_3::eth3",
+            "device_id": "dev_3",
+            "interface": "eth3",
+            "baseline_false_positive": 137,
+            "candidate_false_positive": 125,
+            "false_positive_delta": -12,
+            "baseline_predicted_anomalies": 152,
+            "candidate_predicted_anomalies": 139,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_2::eth0",
+            "device_id": "dev_2",
+            "interface": "eth0",
+            "baseline_false_positive": 125,
+            "candidate_false_positive": 126,
+            "false_positive_delta": 1,
+            "baseline_predicted_anomalies": 137,
+            "candidate_predicted_anomalies": 137,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_12::eth3",
+            "device_id": "dev_12",
+            "interface": "eth3",
+            "baseline_false_positive": 133,
+            "candidate_false_positive": 147,
+            "false_positive_delta": 14,
+            "baseline_predicted_anomalies": 147,
+            "candidate_predicted_anomalies": 161,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_1::eth2",
+            "device_id": "dev_1",
+            "interface": "eth2",
+            "baseline_false_positive": 95,
+            "candidate_false_positive": 116,
+            "false_positive_delta": 21,
+            "baseline_predicted_anomalies": 105,
+            "candidate_predicted_anomalies": 125,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_10::eth0",
+            "device_id": "dev_10",
+            "interface": "eth0",
+            "baseline_false_positive": 132,
+            "candidate_false_positive": 161,
+            "false_positive_delta": 29,
+            "baseline_predicted_anomalies": 148,
+            "candidate_predicted_anomalies": 181,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_6::eth2",
+            "device_id": "dev_6",
+            "interface": "eth2",
+            "baseline_false_positive": 194,
+            "candidate_false_positive": 229,
+            "false_positive_delta": 35,
+            "baseline_predicted_anomalies": 214,
+            "candidate_predicted_anomalies": 250,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          },
+          {
+            "interface_key": "dev_7::eth1",
+            "device_id": "dev_7",
+            "interface": "eth1",
+            "baseline_false_positive": 127,
+            "candidate_false_positive": 164,
+            "false_positive_delta": 37,
+            "baseline_predicted_anomalies": 140,
+            "candidate_predicted_anomalies": 180,
+            "candidate_top_error_feature": "in_out_ratio",
+            "baseline_top_error_feature": "error_rate"
+          }
+        ]
+      },
+      "recommendation": "review_tradeoff"
+    }
+  ]
+}

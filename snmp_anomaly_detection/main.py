@@ -11,8 +11,14 @@ from snmp_anomaly_detection.data.p2_feature_readiness import main as report_p2_m
 from snmp_anomaly_detection.data.p3_event_readiness import main as report_p3_main
 from snmp_anomaly_detection.evaluation.p1_1_comparison import main as compare_p1_main
 from snmp_anomaly_detection.evaluation.p1_baseline import main as evaluate_p1_main
+from snmp_anomaly_detection.evaluation.p1_iforest_baseline import (
+    main as evaluate_iforest_main,
+)
 from snmp_anomaly_detection.inference.csv_replay import main as detect_csv_main
 from snmp_anomaly_detection.inference.detect_anomalies import main as detect_main
+from snmp_anomaly_detection.inference.detect_isolation_forest import (
+    main as detect_iforest_main,
+)
 from snmp_anomaly_detection.preprocessing.feature_engineering import (
     main as feature_engineering_main,
 )
@@ -22,6 +28,9 @@ from snmp_anomaly_detection.streaming.produce_kafka_test_data import (
     main as produce_kafka_test_data_main,
 )
 from snmp_anomaly_detection.training.train_model import main as train_main
+from snmp_anomaly_detection.training.train_isolation_forest import (
+    main as train_iforest_main,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,13 +42,16 @@ def build_parser() -> argparse.ArgumentParser:
             "report-p2",
             "preprocess",
             "train",
+            "train-iforest",
             "evaluate-baseline",
+            "evaluate-iforest",
             "compare-artifacts",
             "report-p3",
             "normalize-events",
             "correlate-events",
             "explain-anomalies",
             "detect",
+            "detect-iforest",
             "detect-csv",
             "detect-kafka-dry",
             "detect-kafka",
@@ -68,8 +80,12 @@ def main() -> None:
         feature_engineering_main()
     elif args.step == "train":
         train_main()
+    elif args.step == "train-iforest":
+        train_iforest_main()
     elif args.step == "evaluate-baseline":
         evaluate_p1_main()
+    elif args.step == "evaluate-iforest":
+        evaluate_iforest_main()
     elif args.step == "compare-artifacts":
         compare_p1_main()
     elif args.step == "report-p3":
@@ -82,6 +98,8 @@ def main() -> None:
         explain_anomalies_main()
     elif args.step == "detect":
         detect_main()
+    elif args.step == "detect-iforest":
+        detect_iforest_main()
     elif args.step == "detect-csv":
         detect_csv_main()
     elif args.step == "detect-kafka-dry":
