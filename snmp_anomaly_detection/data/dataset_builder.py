@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -109,6 +110,321 @@ def main() -> None:
     output_path = save_dataset(dataframe)
     print(f"Dataset generated: {output_path}")
     print(dataframe.head())
+
+
+# ---------------------------------------------------------------------------
+# Power SNMP dataset
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PowerDeviceProfile:
+    """Physical characteristics of a power device used during synthetic generation."""
+    device_id: str
+    device_category: str           # ups | pdu | network | env
+    vendor: str                    # apc | liebert | raritan | cisco | generic
+    phase_count: int               # 1 or 3
+    rated_capacity_w: float        # nameplate rating in Watts
+    battery_ah: float              # Amp-hour capacity (UPS only; 0 for non-UPS)
+    battery_expected_life_years: float = 3.0
+    install_age_days: float = 0.0  # simulated age at dataset start
+
+
+@dataclass(frozen=True)
+class PowerDatasetConfig:
+    start_time: datetime = field(default_factory=lambda: datetime(2025, 1, 1, 0, 0, 0))
+    interval_minutes: int = 5
+    total_points: int = 2016       # ~7 days at 5-min intervals
+    anomaly_probability: float = 0.05
+
+
+# Pre-defined device profiles covering the four device categories
+_DEFAULT_POWER_PROFILES: list[PowerDeviceProfile] = [
+    # APC single-phase UPS (young battery)
+    PowerDeviceProfile("ups_apc_01", "ups", "apc",     1, 3000.0,  7.2, 3.0,   90.0),
+    # APC single-phase UPS (aged battery — near end of life)
+    PowerDeviceProfile("ups_apc_02", "ups", "apc",     1, 3000.0,  7.2, 3.0, 900.0),
+    # Liebert three-phase UPS
+    PowerDeviceProfile("ups_lie_01", "ups", "liebert", 3, 10000.0, 40.0, 5.0, 365.0),
+    # Liebert three-phase UPS (moderate age)
+    PowerDeviceProfile("ups_lie_02", "ups", "liebert", 3, 10000.0, 40.0, 5.0, 700.0),
+    # APC PDU
+    PowerDeviceProfile("pdu_apc_01", "pdu", "apc",    1, 1440.0,  0.0, 0.0,   0.0),
+    # Raritan PDU
+    PowerDeviceProfile("pdu_rar_01", "pdu", "raritan",1, 7200.0,  0.0, 0.0,   0.0),
+    # Cisco switch with dual PSU
+    PowerDeviceProfile("net_cis_01", "network", "cisco", 1, 200.0, 0.0, 0.0,  0.0),
+    # Generic router
+    PowerDeviceProfile("net_gen_01", "network", "generic", 1, 150.0, 0.0, 0.0, 0.0),
+    # Environmental sensor node
+    PowerDeviceProfile("env_gen_01", "env", "generic",   1,   5.0, 0.0, 0.0,  0.0),
+]
+
+
+def _circadian_load_factor(timestep: int, interval_minutes: int) -> float:
+    """Return a 0–1 load factor following a business-hours circadian pattern."""
+    minutes_in_day = 24 * 60
+    minute_of_day = (timestep * interval_minutes) % minutes_in_day
+    # Peak: 09:00–18:00 (minutes 540–1080), valley: 01:00–05:00
+    angle = 2 * math.pi * (minute_of_day - 540) / minutes_in_day
+    base = 0.55 + 0.35 * math.sin(angle - math.pi / 2)
+    return float(np.clip(base + np.random.normal(0, 0.03), 0.1, 1.0))
+
+
+def _battery_voltage_from_charge(charge_pct: float) -> float:
+    """Approximate lead-acid open-circuit voltage (V) from charge %."""
+    # APC SUA3000: nominal 12V*2 = 24V pack; full ~26.4V, depleted ~20.0V
+    return 20.0 + 6.4 * (charge_pct / 100.0)
+
+
+def _runtime_estimate(battery_ah: float, charge_pct: float, load_w: float, voltage_v: float = 24.0) -> float:
+    """Estimate runtime in minutes from battery state and current load."""
+    if load_w <= 0 or battery_ah <= 0:
+        return 999.0
+    # Energy available = capacity * charge% * voltage; load in Wh
+    energy_wh = battery_ah * (charge_pct / 100.0) * voltage_v
+    runtime_h = energy_wh / load_w * 0.85   # 85% inverter efficiency
+    return float(np.clip(runtime_h * 60, 0.0, 999.0))
+
+
+def _battery_degradation_factor(install_age_days: float, expected_life_years: float) -> float:
+    """Return 0–1 capacity factor (1=new, approaching 0 as battery ages)."""
+    age_fraction = install_age_days / (expected_life_years * 365)
+    return float(np.clip(1.0 - 0.5 * age_fraction, 0.1, 1.0))
+
+
+def _phase_voltages(nominal_v: float, phase_count: int) -> tuple[float, float, float]:
+    """Return (l1, l2, l3) voltages; for single-phase l2==l3==l1."""
+    l1 = nominal_v + np.random.normal(0, 1.0)
+    if phase_count == 1:
+        return (l1, l1, l1)
+    # Three-phase: small independent variation per phase
+    l2 = nominal_v + np.random.normal(0, 1.2)
+    l3 = nominal_v + np.random.normal(0, 1.2)
+    return (l1, l2, l3)
+
+
+def _inject_power_anomaly(
+    row: dict,
+    anomaly_type: str,
+    profile: PowerDeviceProfile,
+) -> dict:
+    """Mutate row in-place with a named power anomaly pattern."""
+    nominal_v = 230.0 if profile.vendor in ("liebert", "raritan") else 120.0
+
+    if anomaly_type == "battery_drain":
+        row["battery_charge_pct"] = float(np.clip(row["battery_charge_pct"] - random.uniform(40, 70), 0, 100))
+        row["runtime_remaining_min"] = _runtime_estimate(
+            profile.battery_ah, row["battery_charge_pct"], row["output_power_w"]
+        )
+        row["on_battery_status"] = 1.0
+        # Battery discharging: high current flowing out of battery (negative = discharge convention)
+        row["battery_current_a"] = -float(row["output_power_w"] / max(row["battery_voltage_v"], 1.0))
+
+    elif anomaly_type == "overload":
+        spike = random.uniform(1.5, 2.5)
+        row["output_load_pct"] = float(np.clip(row["output_load_pct"] * spike, 0, 120))
+        row["output_power_w"] = float(row["output_load_pct"] / 100.0 * profile.rated_capacity_w)
+        for ph in ("l1", "l2", "l3"):
+            if f"output_current_{ph}" in row:
+                row[f"output_current_{ph}"] *= spike
+        row["output_current_a"] = float(row["output_power_w"] / max(row.get("output_voltage_v", nominal_v) * 0.95, 1.0))
+
+    elif anomaly_type == "phase_sag":
+        # Drop L1 voltage significantly while L2/L3 remain normal
+        row["input_voltage_l1"] = float(row["input_voltage_l1"] * random.uniform(0.6, 0.8))
+        avg = (row["input_voltage_l1"] + row["input_voltage_l2"] + row["input_voltage_l3"]) / 3
+        if avg > 0:
+            row["voltage_imbalance_pct"] = (
+                max(abs(row["input_voltage_l1"] - avg),
+                    abs(row["input_voltage_l2"] - avg),
+                    abs(row["input_voltage_l3"] - avg)) / avg * 100
+            )
+        # Output voltage sags slightly due to input sag
+        row["output_voltage_v"] = float(row.get("output_voltage_v", nominal_v) * random.uniform(0.92, 0.98))
+
+    elif anomaly_type == "thermal_runaway":
+        row["battery_temperature_c"] = float(row["battery_temperature_c"] + random.uniform(15, 35))
+        row["output_power_w"] = float(row["output_power_w"] * random.uniform(1.2, 1.8))
+        row["output_current_a"] = float(row["output_power_w"] / max(row.get("output_voltage_v", nominal_v) * 0.95, 1.0))
+
+    elif anomaly_type == "psu_failure":
+        row["output_load_pct"] = 0.0
+        row["output_power_w"] = 0.0
+        row["output_current_a"] = 0.0
+        row["output_voltage_v"] = 0.0
+        row["output_frequency_hz"] = 0.0
+        row["battery_current_a"] = 0.0
+        row["on_battery_status"] = 1.0
+        row["bypass_flag"] = 1.0  # metadata only
+
+    return row
+
+
+def _anomaly_types_for_category(category: str) -> list[str]:
+    if category == "ups":
+        return ["battery_drain", "overload", "phase_sag", "thermal_runaway", "psu_failure"]
+    if category == "pdu":
+        return ["overload", "phase_sag", "psu_failure"]
+    if category == "network":
+        return ["overload", "thermal_runaway", "psu_failure"]
+    return ["overload"]
+
+
+def _build_power_row(
+    profile: PowerDeviceProfile,
+    timestamp: datetime,
+    timestep: int,
+    config: PowerDatasetConfig,
+    charge_pct: float,
+    discharge_cycles: float,
+) -> tuple[dict, float]:
+    """Build one power SNMP row; returns the row dict and updated charge_pct."""
+    load_factor = _circadian_load_factor(timestep, config.interval_minutes)
+    load_pct = float(np.clip(load_factor * 100 + np.random.normal(0, 2), 5, 100))
+    output_power_w = load_pct / 100.0 * profile.rated_capacity_w
+
+    # Battery metrics (UPS only; PDU/network/env get neutral values)
+    deg = 1.0  # capacity degradation factor — overwritten for UPS below
+    charge_delta = 0.0
+    if profile.battery_ah > 0:
+        deg = _battery_degradation_factor(
+            profile.install_age_days + timestep * config.interval_minutes / 1440,
+            profile.battery_expected_life_years,
+        )
+        # Slow trickle charge during low-load periods; slight discharge otherwise
+        charge_delta = 0.02 if load_pct < 40 else -0.01
+        charge_pct = float(np.clip(charge_pct + charge_delta + np.random.normal(0, 0.05), 0, 100))
+        effective_charge = charge_pct * deg
+        batt_voltage = _battery_voltage_from_charge(effective_charge)
+        batt_temp = 25.0 + load_factor * 8 + np.random.normal(0, 0.5)
+        runtime_min = _runtime_estimate(profile.battery_ah, effective_charge, output_power_w, batt_voltage)
+    else:
+        charge_pct = 100.0
+        batt_voltage = 0.0
+        batt_temp = 20.0 + np.random.normal(0, 0.3)
+        runtime_min = 0.0
+
+    # Nominal input voltage by vendor convention
+    nominal_input_v = 230.0 if profile.vendor in ("liebert", "raritan") else 120.0
+    l1, l2, l3 = _phase_voltages(nominal_input_v, profile.phase_count)
+    avg_v = (l1 + l2 + l3) / 3
+    vol_imbalance = (max(abs(l1 - avg_v), abs(l2 - avg_v), abs(l3 - avg_v)) / avg_v * 100
+                     if avg_v > 0 else 0.0)
+
+    # Per-phase currents (P = V * I * PF; assume PF=0.95)
+    pf = 0.95
+    phase_power = output_power_w / profile.phase_count
+    i_l1 = phase_power / (l1 * pf) if l1 > 0 else 0.0
+    i_l2 = phase_power / (l2 * pf) if l2 > 0 else 0.0
+    i_l3 = phase_power / (l3 * pf) if l3 > 0 else 0.0
+    avg_i = (i_l1 + i_l2 + i_l3) / 3
+    cur_skew = (max(abs(i_l1 - avg_i), abs(i_l2 - avg_i), abs(i_l3 - avg_i)) / avg_i * 100
+                if avg_i > 0 else 0.0)
+
+    # charge_rate: percentage points per interval (positive = charging)
+    charge_rate = charge_delta + np.random.normal(0, 0.02)
+
+    # --- New canonical features ---
+    # battery_current_a: positive = trickle charging (mains), negative = discharging (on battery)
+    battery_current_a = float(profile.battery_ah * 0.02 + np.random.normal(0, 0.05)) if profile.battery_ah > 0 else 0.0
+    # battery_replace_status: 1 when degradation drops below 60% of rated capacity
+    battery_replace_status = 1.0 if (profile.battery_ah > 0 and deg < 0.6) else 0.0
+    # output_voltage_v: inverter/bypass output voltage (close to nominal with slight noise)
+    output_voltage_v = float(nominal_input_v + np.random.normal(0, 1.0))
+    # output_frequency_hz: output AC frequency (inverter tracks input; slight independent noise)
+    output_frequency_hz = float(50.0 + np.random.normal(0, 0.02))
+    # output_current_a: aggregate AC output current = P / (V * PF)
+    output_current_a = float(output_power_w / max(output_voltage_v * pf, 1.0))
+
+    row: dict = {
+        "timestamp": timestamp,
+        "device_id": profile.device_id,
+        "device_category": profile.device_category,
+        "vendor": profile.vendor,
+        "phase_count": profile.phase_count,
+        # BASELINE_UPS_FEATURES — canonical names
+        "battery_charge_pct": round(charge_pct, 2),
+        "battery_voltage_v": round(batt_voltage, 3),
+        "battery_current_a": round(battery_current_a, 3),
+        "battery_temperature_c": round(batt_temp, 2),
+        "runtime_remaining_min": round(runtime_min, 1),
+        "on_battery_status": 0.0,
+        "battery_replace_status": battery_replace_status,
+        "input_voltage_v": round(avg_v, 2),
+        "input_frequency_hz": round(50.0 + np.random.normal(0, 0.02), 3),
+        "output_voltage_v": round(output_voltage_v, 2),
+        "output_current_a": round(output_current_a, 3),
+        "output_load_pct": round(load_pct, 2),
+        "output_frequency_hz": round(output_frequency_hz, 3),
+        "output_power_w": round(output_power_w, 1),
+        # metadata (not a model feature)
+        "bypass_flag": 0.0,
+        # PHASE_LEVEL_FEATURES additions
+        "input_voltage_l1": round(l1, 2),
+        "input_voltage_l2": round(l2, 2),
+        "input_voltage_l3": round(l3, 2),
+        "input_current_l1": round(i_l1, 3),
+        "input_current_l2": round(i_l2, 3),
+        "input_current_l3": round(i_l3, 3),
+        "output_current_l1": round(i_l1, 3),
+        "output_current_l2": round(i_l2, 3),
+        "output_current_l3": round(i_l3, 3),
+        "voltage_imbalance_pct": round(vol_imbalance, 3),
+        "current_skew_pct": round(cur_skew, 3),
+        # BATTERY_RUL_FEATURES extras
+        "charge_rate": round(charge_rate, 4),
+        "discharge_cycles_approx": round(discharge_cycles, 2),
+        # Label
+        "anomaly": 0,
+        "anomaly_type": "none",
+    }
+    return row, charge_pct
+
+
+def build_power_dataset(
+    config: PowerDatasetConfig | None = None,
+    profiles: list[PowerDeviceProfile] | None = None,
+) -> pd.DataFrame:
+    """Generate a synthetic multi-vendor power SNMP dataset."""
+    config = config or PowerDatasetConfig()
+    profiles = profiles or _DEFAULT_POWER_PROFILES
+
+    rows: list[dict] = []
+    for profile in profiles:
+        charge_pct = random.uniform(85, 100)  # each device starts at different SoC
+        discharge_cycles = profile.install_age_days / 180.0  # ~2 cycles/year
+        current_time = config.start_time
+
+        for timestep in range(config.total_points):
+            row, charge_pct = _build_power_row(
+                profile, current_time, timestep, config, charge_pct, discharge_cycles
+            )
+
+            if random.random() < config.anomaly_probability:
+                anomaly_type = random.choice(_anomaly_types_for_category(profile.device_category))
+                # Skip phase_sag for single-phase devices (not meaningful)
+                if anomaly_type == "phase_sag" and profile.phase_count == 1:
+                    anomaly_type = "overload"
+                row = _inject_power_anomaly(row, anomaly_type, profile)
+                row["anomaly"] = 1
+                row["anomaly_type"] = anomaly_type
+
+            rows.append(row)
+            current_time += timedelta(minutes=config.interval_minutes)
+
+    return pd.DataFrame(rows)
+
+
+def save_power_dataset(
+    dataframe: pd.DataFrame,
+    output_path: str | None = None,
+    paths: ProjectPaths | None = None,
+) -> str:
+    paths = paths or ProjectPaths()
+    paths.ensure_power_directories()
+    target = paths.power_dataset_file if output_path is None else paths.package_root / output_path
+    dataframe.to_csv(target, index=False)
+    return str(target)
 
 
 if __name__ == "__main__":
