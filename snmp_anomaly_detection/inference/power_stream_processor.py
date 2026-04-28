@@ -32,6 +32,34 @@ from snmp_anomaly_detection.preprocessing.phase_features import (
 )
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
 
+# Mirrors apply_log1p_skewed from power_features.py
+_LOG1P_COLS: tuple[str, ...] = ("runtime_remaining_min", "output_power_w")
+
+# Mirrors add_delta_features: source columns → target delta column names.
+# runtime_remaining_min is tracked *after* log1p (same as training order).
+_DELTA_SOURCES: tuple[str, ...] = (
+    "runtime_remaining_min",
+    "battery_charge_pct",
+    "battery_temperature_c",
+    "output_load_pct",
+)
+_DELTA_TARGETS: tuple[str, ...] = (
+    "runtime_delta",
+    "battery_charge_delta",
+    "temperature_delta",
+    "output_load_delta",
+)
+
+# Features excluded from attribution — confirmed zero ground-truth deviation
+_ATTRIBUTION_EXCLUDE: frozenset[str] = frozenset({"input_frequency_hz"})
+
+# output_frequency_hz MSE is excluded for non-UPS categories (pdu/network/env).
+# For UPS it is the inverter output frequency — a real fault signal.
+# For PDU/network/env it is ambient line frequency (grid noise) that causes FPs.
+_NON_UPS_MSE_EXCLUDE: frozenset[str] = frozenset({"output_frequency_hz"})
+
+_EPS = 1e-9
+
 
 @dataclass
 class PowerEvent:
@@ -40,6 +68,8 @@ class PowerEvent:
     device_category: str
     vendor: str
     feature_values: dict[str, float]   # canonical feature name → value
+    phase_count: int = 1               # 1 (single-phase) or 3 (three-phase)
+    session_reset: bool = False        # clears stale per-device delta state on new producer run
 
     def get_baseline_vector(self) -> list[float]:
         return [self.feature_values.get(c, 0.0) for c in BASELINE_UPS_FEATURES]
@@ -52,12 +82,35 @@ class PowerEvent:
 class PowerScoringResult:
     device_id: str
     device_category: str
+    vendor: str
+    phase_count: int
+    window_start: str
     window_end: datetime
+    window_timestamps: list[str]
+    # Baseline model
     baseline_anomaly: int
+    baseline_error: float
+    baseline_threshold: float
+    baseline_peak_timestep: str
+    baseline_top_features: str
+    baseline_timestep_errors: list[float]
+    # Phase model
     phase_anomaly: int
+    phase_error: float
+    phase_threshold: float
+    phase_peak_timestep: str
+    phase_top_features: str
+    phase_timestep_errors: list[float]
+    # Combined flags — mirrors DualModelResult
     combined_flag: int
+    overload_rule_flag: int   # output_load_pct > 100 in any window timestep
+    final_flag: int           # combined_flag OR overload_rule_flag
+    alert_policy: str
     compound_alert: bool
     compound_alert_peer: str = ""
+    # Ground-truth fields — unavailable at inference time; kept for schema parity
+    true_label: int = 0
+    anomaly_types: list[str] = field(default_factory=list)
 
 
 class PowerDeviceWindowManager:
@@ -88,6 +141,16 @@ class PowerStreamProcessor:
         self._load_models()
         self._baseline_windows = PowerDeviceWindowManager(self._baseline_meta["seq_len"])
         self._phase_windows = PowerDeviceWindowManager(self._phase_meta["seq_len"])
+        # Per-device timestamp buffer — aligned with baseline window size
+        self._ts_buffers: dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=self._baseline_meta["seq_len"])
+        )
+        # Per-device raw output_load_pct buffer for overload rule (unscaled, pre-log1p)
+        self._load_pct_buffers: dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=self._baseline_meta["seq_len"])
+        )
+        # Per-device last-seen values for delta feature computation
+        self._prev_raw: dict[str, dict[str, float]] = {}
         # Recent anomaly timestamps for compound alert correlation
         self._recent_ups_anomalies: deque[tuple[str, datetime]] = deque(maxlen=100)
         self._recent_pdu_anomalies: deque[tuple[str, datetime]] = deque(maxlen=100)
@@ -108,6 +171,8 @@ class PowerStreamProcessor:
         self._baseline_model.eval()
         self._baseline_scaler = joblib.load(p.power_outputs_dir / "baseline_scaler.pkl")
         self._baseline_threshold: float = self._baseline_meta["threshold"]
+        self._baseline_normal_errors: dict[str, float] = self._baseline_meta.get("normal_feature_errors", {})
+        self._baseline_normal_stds: dict[str, float] = self._baseline_meta.get("normal_feature_error_stds", {})
 
         with open(p.power_phase_outputs_dir / "phase_metadata.json") as f:
             self._phase_meta = json.load(f)
@@ -122,14 +187,98 @@ class PowerStreamProcessor:
         self._phase_model.eval()
         self._phase_scaler = joblib.load(p.power_phase_outputs_dir / "phase_scaler.pkl")
         self._phase_threshold: float = self._phase_meta["threshold"]
+        self._phase_normal_errors: dict[str, float] = self._phase_meta.get("normal_feature_errors", {})
+        self._phase_normal_stds: dict[str, float] = self._phase_meta.get("normal_feature_error_stds", {})
 
-    def _score(self, model, window: np.ndarray, threshold: float) -> tuple[float, int]:
+    def _apply_preprocessing(self, event: PowerEvent) -> None:
+        """Mirror the training transforms applied before scaling.
+
+        Replicates, in order:
+          1. apply_log1p_skewed  — log1p on runtime_remaining_min and output_power_w
+          2. add_delta_features  — signed_log1p of per-device diff for the 4 delta cols
+        """
+        # A new producer session signals that _prev_raw carries state from a different
+        # run. Clearing it prevents a large delta spike on the first scored window.
+        if event.session_reset:
+            self._prev_raw.pop(event.device_id, None)
+
+        fv = event.feature_values
+
+        # Step 1: log1p on skewed cols (runtime is log1p'd before delta is computed, same as training)
+        for col in _LOG1P_COLS:
+            if col in fv:
+                fv[col] = float(np.log1p(max(fv[col], 0.0)))
+
+        # Step 2: per-device signed_log1p delta
+        prev = self._prev_raw.get(event.device_id)
+        for src, tgt in zip(_DELTA_SOURCES, _DELTA_TARGETS):
+            cur = fv.get(src, 0.0)
+            if prev is not None:
+                diff = cur - prev.get(src, cur)
+                fv[tgt] = float(np.sign(diff) * np.log1p(abs(diff)))
+            else:
+                fv[tgt] = 0.0  # first event for this device — no previous value
+
+        # Persist current (post-log1p) values for the next event from this device
+        self._prev_raw[event.device_id] = {src: fv.get(src, 0.0) for src in _DELTA_SOURCES}
+
+    def _score_detailed(
+        self,
+        model,
+        window: np.ndarray,
+        threshold: float,
+        feature_names: list[str],
+        normal_errors: dict[str, float],
+        normal_stds: dict[str, float],
+        mse_exclude: frozenset[str] = frozenset(),
+    ) -> dict:
+        """Score one window and return reconstruction error diagnostics.
+
+        Returns mean_error, per-timestep errors, flag, peak timestep index,
+        and top-3 features by z-score surprise — matching dual_model_scorer.py.
+        """
         loss_fn = torch.nn.MSELoss(reduction="none")
         tensor = torch.tensor(window[np.newaxis], dtype=torch.float32)
         with torch.no_grad():
             recon = model(tensor)
-            error = float(loss_fn(recon, tensor).mean().item())
-        return error, int(error > threshold)
+            errors = loss_fn(recon, tensor).squeeze(0).cpu().numpy()  # (seq_len, n_feat)
+
+        if mse_exclude:
+            active_cols = [j for j, f in enumerate(feature_names) if f not in mse_exclude]
+            errors_active = errors[:, active_cols]
+        else:
+            errors_active = errors
+
+        timestep_errors = errors_active.mean(axis=1)   # (seq_len,)
+        feature_errors = errors.mean(axis=0)            # (n_feat,) — full, for attribution
+        mean_error = float(errors_active.mean())
+
+        # Z-score surprise: std-devs above normal reconstruction error per feature
+        surprise = np.clip(
+            [
+                (feature_errors[j] - normal_errors.get(f, 0.0))
+                / (normal_stds.get(f, _EPS) + _EPS)
+                for j, f in enumerate(feature_names)
+            ],
+            0.0, None,
+        )
+        for j, f in enumerate(feature_names):
+            if f in _ATTRIBUTION_EXCLUDE:
+                surprise[j] = 0.0
+
+        peak_idx = int(np.argmax(timestep_errors))
+        top_features = [
+            feature_names[j]
+            for j in np.argsort(surprise)[::-1][:3]
+            if j < len(feature_names) and surprise[j] > 0.0
+        ]
+        return {
+            "mean_error": mean_error,
+            "flag": int(mean_error > threshold),
+            "timestep_errors": [round(float(e), 6) for e in timestep_errors],
+            "peak_timestep_idx": peak_idx,
+            "top_features": ",".join(top_features),
+        }
 
     def _check_compound_alert(
         self, category: str, device_id: str, ts: datetime
@@ -146,8 +295,17 @@ class PowerStreamProcessor:
         return False, ""
 
     def process_event(self, event: PowerEvent) -> PowerScoringResult | None:
-        # Scale baseline vector
-        b_raw = np.array([event.get_baseline_vector()])
+        # Apply log1p + delta features before scaling (mirrors training preprocessing)
+        self._apply_preprocessing(event)
+
+        # Track timestamp and raw output_load_pct (unscaled) for overload rule
+        self._ts_buffers[event.device_id].append(str(event.timestamp))
+        self._load_pct_buffers[event.device_id].append(
+            event.feature_values.get("output_load_pct", 0.0)
+        )
+
+        # Scale baseline vector — use DataFrame to match column names the scaler was fitted with
+        b_raw = pd.DataFrame([event.get_baseline_vector()], columns=list(BASELINE_UPS_FEATURES))
         b_scaled = self._baseline_scaler.transform(b_raw)[0].tolist()
         b_window = self._baseline_windows.push(event.device_id, b_scaled)
 
@@ -160,7 +318,7 @@ class PowerStreamProcessor:
                         min(max(event.feature_values[col], 0.0), _IMBALANCE_CLIP_MAX)
                         / _IMBALANCE_CLIP_MAX
                     )
-            p_raw = np.array([event.get_phase_vector()])
+            p_raw = pd.DataFrame([event.get_phase_vector()], columns=list(PHASE_LEVEL_FEATURES))
             p_scaled = self._phase_scaler.transform(p_raw)[0].tolist()
             p_window = self._phase_windows.push(event.device_id, p_scaled)
 
@@ -170,17 +328,43 @@ class PowerStreamProcessor:
         if event.device_category == "ups" and p_window is None:
             return None
 
-        _, b_flag = self._score(self._baseline_model, b_window, self._baseline_threshold)
-        p_flag = 0
-        if event.device_category == "ups" and p_window is not None:
-            _, p_flag = self._score(self._phase_model, p_window, self._phase_threshold)
+        win_timestamps = list(self._ts_buffers[event.device_id])
+        win_load_pct = list(self._load_pct_buffers[event.device_id])
 
+        mse_excl = _NON_UPS_MSE_EXCLUDE if event.device_category != "ups" else frozenset()
+        b_detail = self._score_detailed(
+            self._baseline_model, b_window, self._baseline_threshold,
+            list(BASELINE_UPS_FEATURES),
+            self._baseline_normal_errors, self._baseline_normal_stds,
+            mse_excl,
+        )
+
+        # Phase scoring: UPS only; other categories get zero-filled placeholders
+        if event.device_category == "ups" and p_window is not None:
+            p_detail = self._score_detailed(
+                self._phase_model, p_window, self._phase_threshold,
+                list(PHASE_LEVEL_FEATURES),
+                self._phase_normal_errors, self._phase_normal_stds,
+                mse_excl,
+            )
+        else:
+            p_detail = {
+                "mean_error": 0.0, "flag": 0,
+                "timestep_errors": [], "peak_timestep_idx": 0, "top_features": "",
+            }
+
+        b_flag = b_detail["flag"]
+        p_flag = p_detail["flag"]
         policy = self._config.alert_policy
         combined = int(b_flag or p_flag) if policy == "or" else int(b_flag and p_flag)
 
+        # Rule-based overload: output_load_pct > 100 is physically impossible during normal op
+        overload_rule = int(bool(win_load_pct) and max(win_load_pct) > 100.0)
+        final_flag = int(combined or overload_rule)
+
         # Compound alert tracking
         compound, peer = False, ""
-        if combined:
+        if final_flag:
             compound, peer = self._check_compound_alert(
                 event.device_category, event.device_id, event.timestamp
             )
@@ -189,13 +373,36 @@ class PowerStreamProcessor:
             elif event.device_category == "pdu":
                 self._recent_pdu_anomalies.append((event.device_id, event.timestamp))
 
+        b_peak_idx = b_detail["peak_timestep_idx"]
+        p_peak_idx = p_detail["peak_timestep_idx"]
+
         return PowerScoringResult(
             device_id=event.device_id,
             device_category=event.device_category,
+            vendor=event.vendor,
+            phase_count=event.phase_count,
+            window_start=win_timestamps[0] if win_timestamps else "",
             window_end=event.timestamp,
+            window_timestamps=win_timestamps,
             baseline_anomaly=b_flag,
+            baseline_error=round(b_detail["mean_error"], 6),
+            baseline_threshold=round(self._baseline_threshold, 6),
+            baseline_peak_timestep=win_timestamps[b_peak_idx] if win_timestamps else "",
+            baseline_top_features=b_detail["top_features"],
+            baseline_timestep_errors=b_detail["timestep_errors"],
             phase_anomaly=p_flag,
+            phase_error=round(p_detail["mean_error"], 6),
+            phase_threshold=round(self._phase_threshold, 6),
+            phase_peak_timestep=(
+                win_timestamps[p_peak_idx]
+                if win_timestamps and p_detail["timestep_errors"] else ""
+            ),
+            phase_top_features=p_detail["top_features"],
+            phase_timestep_errors=p_detail["timestep_errors"],
             combined_flag=combined,
+            overload_rule_flag=overload_rule,
+            final_flag=final_flag,
+            alert_policy=policy,
             compound_alert=compound,
             compound_alert_peer=peer,
         )

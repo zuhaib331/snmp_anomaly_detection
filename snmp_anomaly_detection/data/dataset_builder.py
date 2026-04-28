@@ -147,10 +147,14 @@ _DEFAULT_POWER_PROFILES: list[PowerDeviceProfile] = [
     PowerDeviceProfile("ups_lie_01", "ups", "liebert", 3, 10000.0, 40.0, 5.0, 365.0),
     # Liebert three-phase UPS (moderate age)
     PowerDeviceProfile("ups_lie_02", "ups", "liebert", 3, 10000.0, 40.0, 5.0, 700.0),
-    # APC PDU
+    # APC PDU (single-phase)
     PowerDeviceProfile("pdu_apc_01", "pdu", "apc",    1, 1440.0,  0.0, 0.0,   0.0),
-    # Raritan PDU
+    # Raritan PDU (single-phase)
     PowerDeviceProfile("pdu_rar_01", "pdu", "raritan",1, 7200.0,  0.0, 0.0,   0.0),
+    # Raritan 3-phase PDU — adds phase_sag training data
+    PowerDeviceProfile("pdu_rar_02", "pdu", "raritan",3, 14400.0, 0.0, 0.0,   0.0),
+    # Liebert three-phase UPS (new, moderate age) — additional phase_sag coverage
+    PowerDeviceProfile("ups_lie_03", "ups", "liebert", 3, 10000.0, 40.0, 5.0, 500.0),
     # Cisco switch with dual PSU
     PowerDeviceProfile("net_cis_01", "network", "cisco", 1, 200.0, 0.0, 0.0,  0.0),
     # Generic router
@@ -207,30 +211,39 @@ def _inject_power_anomaly(
     row: dict,
     anomaly_type: str,
     profile: PowerDeviceProfile,
+    event: "_AnomalyEvent | None" = None,
 ) -> dict:
-    """Mutate row in-place with a named power anomaly pattern."""
+    """Mutate row in-place with a named power anomaly pattern.
+
+    event: pre-sampled event parameters (add_load, max_temp_rise, drain_amount).
+    Overload uses additive injection so that even low-background timesteps produce
+    clearly above-normal load values, giving the LSTM a strong learnable signature.
+    All other fault types apply full-strength injection uniformly throughout the event.
+    """
     nominal_v = 230.0 if profile.vendor in ("liebert", "raritan") else 120.0
 
     if anomaly_type == "battery_drain":
-        row["battery_charge_pct"] = float(np.clip(row["battery_charge_pct"] - random.uniform(40, 70), 0, 100))
+        drain = event.drain_amount if event else random.uniform(40, 70)
+        row["battery_charge_pct"] = float(np.clip(row["battery_charge_pct"] - drain, 0, 100))
         row["runtime_remaining_min"] = _runtime_estimate(
             profile.battery_ah, row["battery_charge_pct"], row["output_power_w"]
         )
         row["on_battery_status"] = 1.0
-        # Battery discharging: high current flowing out of battery (negative = discharge convention)
         row["battery_current_a"] = -float(row["output_power_w"] / max(row["battery_voltage_v"], 1.0))
 
     elif anomaly_type == "overload":
-        spike = random.uniform(1.5, 2.5)
-        row["output_load_pct"] = float(np.clip(row["output_load_pct"] * spike, 0, 120))
+        # Additive injection: background load + fixed addition guarantees load is always
+        # significantly above normal regardless of the circadian baseline at injection time.
+        add_load = event.add_load if event else random.uniform(40, 70)
+        row["output_load_pct"] = float(np.clip(row["output_load_pct"] + add_load, 0, 120))
         row["output_power_w"] = float(row["output_load_pct"] / 100.0 * profile.rated_capacity_w)
+        load_ratio = row["output_load_pct"] / max(row["output_load_pct"] - add_load, 1.0)
         for ph in ("l1", "l2", "l3"):
             if f"output_current_{ph}" in row:
-                row[f"output_current_{ph}"] *= spike
+                row[f"output_current_{ph}"] *= load_ratio
         row["output_current_a"] = float(row["output_power_w"] / max(row.get("output_voltage_v", nominal_v) * 0.95, 1.0))
 
     elif anomaly_type == "phase_sag":
-        # Drop L1 voltage significantly while L2/L3 remain normal
         row["input_voltage_l1"] = float(row["input_voltage_l1"] * random.uniform(0.6, 0.8))
         avg = (row["input_voltage_l1"] + row["input_voltage_l2"] + row["input_voltage_l3"]) / 3
         if avg > 0:
@@ -239,11 +252,11 @@ def _inject_power_anomaly(
                     abs(row["input_voltage_l2"] - avg),
                     abs(row["input_voltage_l3"] - avg)) / avg * 100
             )
-        # Output voltage sags slightly due to input sag
         row["output_voltage_v"] = float(row.get("output_voltage_v", nominal_v) * random.uniform(0.92, 0.98))
 
     elif anomaly_type == "thermal_runaway":
-        row["battery_temperature_c"] = float(row["battery_temperature_c"] + random.uniform(15, 35))
+        temp_rise = event.max_temp_rise if event else random.uniform(15, 35)
+        row["battery_temperature_c"] = float(row["battery_temperature_c"] + temp_rise)
         row["output_power_w"] = float(row["output_power_w"] * random.uniform(1.2, 1.8))
         row["output_current_a"] = float(row["output_power_w"] / max(row.get("output_voltage_v", nominal_v) * 0.95, 1.0))
 
@@ -255,7 +268,7 @@ def _inject_power_anomaly(
         row["output_frequency_hz"] = 0.0
         row["battery_current_a"] = 0.0
         row["on_battery_status"] = 1.0
-        row["bypass_flag"] = 1.0  # metadata only
+        row["bypass_flag"] = 1.0
 
     return row
 
@@ -268,6 +281,69 @@ def _anomaly_types_for_category(category: str) -> list[str]:
     if category == "network":
         return ["overload", "thermal_runaway", "psu_failure"]
     return ["overload"]
+
+
+# Event duration ranges (timesteps) per anomaly type.
+# Overload and thermal_runaway are intentionally long so the LSTM sees the ramp-up.
+_EVENT_DURATION_RANGE: dict[str, tuple[int, int]] = {
+    "overload":        (30, 60),
+    "thermal_runaway": (24, 48),
+    "battery_drain":   (12, 24),
+    "phase_sag":       (10, 20),
+    "psu_failure":     (6,  12),
+}
+_AVG_EVENT_DURATION = 25  # approximate mean across types, used for rate calibration
+
+
+@dataclass(frozen=True)
+class _AnomalyEvent:
+    start: int
+    end: int                    # exclusive
+    anomaly_type: str
+    # Event-level parameters sampled once so every timestep in the event is consistent.
+    # Overload uses additive load (pp) rather than a multiplier so that even low-background
+    # timesteps produce clearly above-normal load and the LSTM learns a strong ramp signature.
+    add_load: float = 0.0       # overload: load percentage points to add (constant per step)
+    max_temp_rise: float = 0.0  # thermal_runaway: temperature rise applied every event step
+    drain_amount: float = 0.0   # battery_drain: charge subtraction applied every event step
+
+
+def _generate_anomaly_events(
+    total_points: int,
+    anomaly_probability: float,
+    device_category: str,
+    phase_count: int,
+) -> list[_AnomalyEvent]:
+    """Pre-generate non-overlapping multi-timestep anomaly events for one device.
+
+    The event start probability is scaled by _AVG_EVENT_DURATION so that total
+    anomaly timesteps ≈ total_points * anomaly_probability, preserving the overall
+    anomaly fraction seen during training.
+    """
+    event_probability = anomaly_probability / _AVG_EVENT_DURATION
+    events: list[_AnomalyEvent] = []
+    t = 0
+    while t < total_points:
+        if random.random() < event_probability:
+            anomaly_type = random.choice(_anomaly_types_for_category(device_category))
+            if anomaly_type == "phase_sag" and phase_count == 1:
+                anomaly_type = "overload"
+            min_dur, max_dur = _EVENT_DURATION_RANGE[anomaly_type]
+            duration = random.randint(min_dur, max_dur)
+            end = min(t + duration, total_points)
+            events.append(_AnomalyEvent(
+                start=t,
+                end=end,
+                anomaly_type=anomaly_type,
+                add_load=random.uniform(55, 75) if anomaly_type == "overload" else 0.0,
+                max_temp_rise=random.uniform(15, 35) if anomaly_type == "thermal_runaway" else 0.0,
+                drain_amount=random.uniform(40, 70) if anomaly_type == "battery_drain" else 0.0,
+            ))
+            # Skip ahead past the event plus a minimum quiet gap
+            t = end + random.randint(6, 24)
+        else:
+            t += 1
+    return events
 
 
 def _build_power_row(
@@ -391,23 +467,33 @@ def build_power_dataset(
 
     rows: list[dict] = []
     for profile in profiles:
-        charge_pct = random.uniform(85, 100)  # each device starts at different SoC
-        discharge_cycles = profile.install_age_days / 180.0  # ~2 cycles/year
+        charge_pct = random.uniform(85, 100)
+        discharge_cycles = profile.install_age_days / 180.0
         current_time = config.start_time
+
+        # Pre-generate multi-timestep events so overload/thermal_runaway have gradual ramps
+        events = _generate_anomaly_events(
+            config.total_points,
+            config.anomaly_probability,
+            profile.device_category,
+            profile.phase_count,
+        )
+        # Build a fast lookup: timestep → event
+        timestep_to_event: dict[int, _AnomalyEvent] = {}
+        for ev in events:
+            for t in range(ev.start, ev.end):
+                timestep_to_event[t] = ev
 
         for timestep in range(config.total_points):
             row, charge_pct = _build_power_row(
                 profile, current_time, timestep, config, charge_pct, discharge_cycles
             )
 
-            if random.random() < config.anomaly_probability:
-                anomaly_type = random.choice(_anomaly_types_for_category(profile.device_category))
-                # Skip phase_sag for single-phase devices (not meaningful)
-                if anomaly_type == "phase_sag" and profile.phase_count == 1:
-                    anomaly_type = "overload"
-                row = _inject_power_anomaly(row, anomaly_type, profile)
+            if timestep in timestep_to_event:
+                ev = timestep_to_event[timestep]
+                row = _inject_power_anomaly(row, ev.anomaly_type, profile, ev)
                 row["anomaly"] = 1
-                row["anomaly_type"] = anomaly_type
+                row["anomaly_type"] = ev.anomaly_type
 
             rows.append(row)
             current_time += timedelta(minutes=config.interval_minutes)

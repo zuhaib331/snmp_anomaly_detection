@@ -26,9 +26,11 @@ BASELINE_UPS_FEATURES: tuple[str, ...] = (
     "output_load_pct",
     "output_frequency_hz",
     "output_power_w",
-    # Rate-of-change features — capture slow-draining signals within a window
+    # Rate-of-change features — capture slow-changing signals within a window
     "runtime_delta",
     "battery_charge_delta",
+    "temperature_delta",    # rising temp → thermal_runaway signal
+    "output_load_delta",    # load ramp-up → overload signal
 )
 
 # Per-phase raw metrics (phase-level model input) — superset of BASELINE_UPS_FEATURES
@@ -190,7 +192,8 @@ class PowerTrainingConfig:
     learning_rate: float = 1e-3
     hidden_size: int = 64
     latent_size: int = 32
-    threshold_std_multiplier: float = 3.0
+    threshold_std_multiplier: float = 2.0  # lowered from 3.0: better recall on soft anomalies
+    seq_len: int = 20                       # 20 × 5-min steps = 100-min context window
     dropout: float = 0.1              # used for MC Dropout in RUL confidence intervals
 
 

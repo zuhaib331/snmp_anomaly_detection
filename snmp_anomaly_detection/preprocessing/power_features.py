@@ -30,15 +30,20 @@ def add_delta_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute per-device rate-of-change features.
 
     Must be called AFTER apply_log1p_skewed so runtime_remaining_min is already
-    compressed. signed_log1p is applied to squash extreme delta spikes during anomalies
-    (e.g. battery_charge_pct dropping 97 points in one step during PSU failure).
+    compressed. signed_log1p squashes extreme delta spikes during anomalies
+    (e.g. battery_charge_pct dropping 97 pts in one step, output_load_pct jumping to 120).
+    temperature_delta and output_load_delta give the LSTM early warning on gradual anomalies.
     """
     df = df.copy()
-    runtime_diff = df.groupby("device_id")["runtime_remaining_min"].diff().fillna(0.0)
-    charge_diff  = df.groupby("device_id")["battery_charge_pct"].diff().fillna(0.0)
-    # signed_log1p: preserves direction, compresses magnitude — handles outlier spikes
-    df["runtime_delta"]      = np.sign(runtime_diff) * np.log1p(np.abs(runtime_diff))
-    df["battery_charge_delta"] = np.sign(charge_diff)  * np.log1p(np.abs(charge_diff))
+    runtime_diff  = df.groupby("device_id")["runtime_remaining_min"].diff().fillna(0.0)
+    charge_diff   = df.groupby("device_id")["battery_charge_pct"].diff().fillna(0.0)
+    temp_diff     = df.groupby("device_id")["battery_temperature_c"].diff().fillna(0.0)
+    load_diff     = df.groupby("device_id")["output_load_pct"].diff().fillna(0.0)
+    # signed_log1p: preserves direction, compresses magnitude
+    df["runtime_delta"]        = np.sign(runtime_diff)  * np.log1p(np.abs(runtime_diff))
+    df["battery_charge_delta"] = np.sign(charge_diff)   * np.log1p(np.abs(charge_diff))
+    df["temperature_delta"]    = np.sign(temp_diff)     * np.log1p(np.abs(temp_diff))
+    df["output_load_delta"]    = np.sign(load_diff)     * np.log1p(np.abs(load_diff))
     return df
 
 

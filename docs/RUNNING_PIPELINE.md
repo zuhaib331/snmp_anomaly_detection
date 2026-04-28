@@ -46,6 +46,7 @@ python3 main.py --help
 Available steps:
 
 ```bash
+# Network SNMP pipeline
 python3 main.py generate-data
 python3 main.py preprocess
 python3 main.py train
@@ -54,6 +55,18 @@ python3 main.py detect-csv
 python3 main.py detect-kafka-dry
 python3 main.py detect-kafka
 python3 main.py produce-kafka-test-data
+
+# Power SNMP pipeline (feature-power-snmp-detection branch)
+python3 main.py generate-power-data
+python3 main.py preprocess-power
+python3 main.py train-power-baseline
+python3 main.py train-power-phase
+python3 main.py train-battery-rul
+python3 main.py evaluate-power-baseline
+python3 main.py predict-battery-rul
+python3 main.py detect-power-csv
+python3 main.py detect-power-kafka
+python3 main.py produce-power-kafka-test
 ```
 
 ## 4. Run Each Module Separately
@@ -333,11 +346,16 @@ This branch adds anomaly detection and forecasting for **power equipment** monit
 
 It adds **10 new CLI commands** on top of the original 8 and trains **three separate models**:
 
-1. **Baseline LSTM Autoencoder** — 10 aggregated UPS health metrics (battery %, voltage, temperature, runtime, input voltage/frequency, output load/power, battery flag, bypass flag)
-2. **Phase-level LSTM Autoencoder** — 21 features including per-phase L1/L2/L3 voltages and currents plus voltage and current imbalance percentages
+1. **Baseline LSTM Autoencoder** — 18 aggregated UPS health metrics including rate-of-change delta features (`runtime_delta`, `battery_charge_delta`, `temperature_delta`, `output_load_delta`)
+2. **Phase-level LSTM Autoencoder** — 29 features including per-phase L1/L2/L3 voltages and currents, voltage/current imbalance percentages, and all delta features
 3. **Battery RUL LSTM Regression** — predicts days until battery replacement from charge rate, discharge cycles, and battery health trends
 
-The baseline and phase models run together as a **dual-model scorer** with an OR alert policy (either model flags → alert).
+The baseline and phase models run together as a **three-signal scorer**:
+- Baseline LSTM reconstruction error vs per-category threshold
+- Phase LSTM reconstruction error vs per-category threshold
+- Rule-based overload flag (`output_load_pct > 100` → zero false positives)
+
+`final_flag = baseline_flag OR phase_flag OR overload_rule_flag`
 
 ### Quick start (full pipeline)
 
@@ -361,9 +379,10 @@ python3 main.py detect-power-csv
 python3 main.py train-battery-rul
 python3 main.py predict-battery-rul
 
-# Phase 5 — live Kafka streaming (requires Kafka running)
-python3 main.py produce-power-kafka-test   # terminal 1
-python3 main.py detect-power-kafka         # terminal 2
+# Phase 5 — live Kafka streaming (requires Kafka running on localhost:9092)
+python3 main.py detect-power-kafka                                                             # terminal 1
+python3 main.py produce-power-kafka-test --use-training-profiles --anomaly-probability 0.0    # terminal 2: smoke test (expect zero alerts)
+python3 main.py produce-power-kafka-test --use-training-profiles --seed 42                    # terminal 2: full detection test
 ```
 
 ### Command reference
@@ -397,7 +416,9 @@ Outputs:
 python3 main.py train-power-baseline
 ```
 
-Trains a 10-feature LSTM Autoencoder (hidden=64, latent=32, 30 epochs). Threshold is set at the 95th percentile of validation reconstruction errors on normal sequences.
+Trains an 18-feature LSTM Autoencoder (hidden=64, latent=32, 30 epochs, seq_len=20).
+Threshold is `mean + 2.0×std` of training reconstruction errors on normal sequences.
+Also computes **per-device-category thresholds** (env/network/pdu/ups) saved in metadata.
 
 Outputs:
 - `snmp_anomaly_detection/outputs/power_baseline/baseline_model.pt`
@@ -412,14 +433,12 @@ Runs the baseline model on the held-out test split and reports Precision, Recall
 Output:
 - `snmp_anomaly_detection/outputs/power_baseline/p1_metrics.json`
 
-Achieved metrics on synthetic dataset:
+Achieved metrics on synthetic dataset (single-model baseline only):
 
 | Metric | Value |
 |--------|-------|
-| Precision | 0.956 |
-| Recall | 0.547 |
-| F1 | 0.696 |
-| Threshold | 0.0624 |
+| Threshold (global) | 0.193 |
+| Per-category thresholds | env=0.112, network=0.172, pdu=0.113, ups=0.219 |
 
 #### Phase 3 — Phase-level model + dual detection
 
@@ -427,7 +446,9 @@ Achieved metrics on synthetic dataset:
 python3 main.py train-power-phase
 ```
 
-Trains a 21-feature LSTM Autoencoder on per-phase L1/L2/L3 metrics plus voltage/current imbalance percentages.
+Trains a 29-feature LSTM Autoencoder on per-phase L1/L2/L3 metrics, voltage/current imbalance
+percentages, and all four delta features (runtime, charge, temperature, load).
+Also saves per-category thresholds to `phase_metadata.json`.
 
 > **Important:** `voltage_imbalance_pct` and `current_skew_pct` are clipped to `[0%, 10%]` before RobustScaler. Single-phase devices produce near-zero IQR for these columns which causes RobustScaler to overflow. Clipping to the physical fault ceiling (`10%`) prevents this.
 
@@ -440,22 +461,40 @@ Outputs:
 python3 main.py detect-power-csv
 ```
 
-Runs the **dual-model scorer** on the full CSV dataset. Both models score every window independently; the combined flag uses OR policy (either model above threshold → alert).
+Runs the **three-signal scorer** on the full CSV dataset:
+1. Baseline LSTM — per-category threshold
+2. Phase LSTM — per-category threshold
+3. Rule: `output_load_pct > 100` → `overload_rule_flag=1` (zero FP)
+
+`final_flag = combined_flag OR overload_rule_flag`
 
 > **Implementation note:** `PHASE_LEVEL_FEATURES ⊃ BASELINE_UPS_FEATURES`. Scaling must be done into **separate numpy arrays** — not the same dataframe — to prevent the phase scaler from overwriting the baseline-scaled columns.
 
 Outputs:
-- `snmp_anomaly_detection/outputs/power_dual/anomaly_results.csv`
+- `snmp_anomaly_detection/outputs/power_dual/anomaly_results.csv` — per-window scores including `final_flag`
 - `snmp_anomaly_detection/outputs/power_dual/detection_summary.json`
+- `snmp_anomaly_detection/outputs/power_dual/anomaly_windows_detail.json` — per-timestep breakdown
 
-Achieved metrics (OR policy):
+Achieved metrics (three-signal OR, 2026-04-27):
 
 | Metric | Value |
 |--------|-------|
-| F1 | 0.741 |
-| Precision | 0.953 |
-| Windows flagged | 4,739 / 18,054 |
-| True anomaly windows | 7,443 |
+| **Precision** | **0.992** |
+| **Recall** | **0.815** |
+| **F1** | **0.895** |
+| Windows flagged (final) | 9,511 / 17,964 |
+| True anomaly windows | 11,575 |
+| False positive rate | 1.2% |
+
+Per anomaly type:
+
+| Type | Recall |
+|---|---|
+| battery_drain | 1.000 |
+| psu_failure | 1.000 |
+| thermal_runaway | 0.948 |
+| overload | 0.653 |
+| phase_sag | 0.539 |
 
 #### Phase 4 — Battery RUL forecasting
 
@@ -486,21 +525,75 @@ Output:
 
 #### Phase 5 — Kafka streaming
 
-```bash
-# Terminal 1 — produce 500 synthetic power events to Kafka topic snmp-power-events
-python3 main.py produce-power-kafka-test
+**Prerequisites:** Kafka broker running on `localhost:9092`. Topic: `snmp-power-events`.
 
-# Terminal 2 — consume and run dual-model detection live
+Run the consumer and producer in separate terminals:
+
+```bash
+# Terminal 1 — start live dual-model detection
 python3 main.py detect-power-kafka
 ```
 
-The stream processor routes events by `device_category`:
-- `ups` → baseline model + phase model (dual scoring)
-- `pdu`, `network`, `env` → baseline model only
+```bash
+# Terminal 2 — smoke test first (no anomalies, expect zero alerts)
+python3 main.py produce-power-kafka-test --use-training-profiles --anomaly-probability 0.0
+
+# Full detection test (anomalies injected, reproducible)
+python3 main.py produce-power-kafka-test --use-training-profiles --seed 42
+
+# Stress test (higher anomaly rate)
+python3 main.py produce-power-kafka-test --use-training-profiles --anomaly-probability 0.15 --seed 99
+
+# Random fleet (for exploring generalisation — expect some FPs until model is retrained on wider data)
+python3 main.py produce-power-kafka-test --device-count 16 --num-events 800 --seed 42
+```
+
+**Testing strategy — always run in this order:**
+
+1. **Smoke test** (`--use-training-profiles --anomaly-probability 0.0`): zero alerts expected. Any alert is a false positive and indicates a model or preprocessing issue.
+2. **Full detection test** (`--use-training-profiles --seed 42`): alerts should appear only on injected anomaly windows. Compare `final_flag` against `expected_label` in the JSONL output.
+3. **Stress test** (`--anomaly-probability 0.15`): verifies the alert pipeline fires reliably at higher injection rates.
+
+Producer options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--use-training-profiles` | off | Use the exact 11 training device profiles instead of random ones. **Required for smoke testing** — guarantees all feature values are in-distribution for the fitted scaler. Ignores `--device-count`. |
+| `--device-count` | 12 | Number of randomly generated devices. Ignored when `--use-training-profiles` is set. |
+| `--num-events` | 600 | Total main-phase events to produce. A warmup batch of 20 events per device is always prepended. |
+| `--sleep-seconds` | 0.05 | Delay between messages (~20 msg/s). |
+| `--anomaly-probability` | 0.05 | Per-event anomaly injection probability. Set to `0.0` for smoke testing. |
+| `--seed` | random | Random seed for reproducible profiles and data. |
+
+**Why `--use-training-profiles` matters:** random profiles can generate device configurations (e.g. a 10 000 W UPS at 120 V) whose feature values — particularly `output_current_a` — fall outside the range seen during training, causing every window to score above the reconstruction threshold even with no anomaly injected. Training profiles are guaranteed in-distribution.
+
+With random profiles (no flag), the fleet is distributed across categories with weighted sampling:
+
+| Category | Phase options | Vendors |
+|----------|--------------|---------|
+| `ups` | 1-phase or 3-phase | apc, liebert, generic |
+| `pdu` | 1-phase or 3-phase | apc, raritan, generic |
+| `network` | 1-phase only | cisco, generic |
+| `env` | 1-phase only | generic |
+
+**Device routing** in the stream processor:
+- `ups` → baseline LSTM + phase LSTM (dual scoring)
+- `pdu`, `network`, `env` → baseline LSTM only
 
 **Compound alerts**: when a UPS anomaly and a PDU anomaly occur within 10 minutes of each other, a `COMPOUND_ALERT` is emitted correlating both devices.
 
-Requires Kafka running locally on `localhost:9092`. Topic: `snmp-power-events`.
+**Runtime file updates**: all three report files are rewritten after every scored window — you can open them in a viewer while the consumer is running and see results accumulate in real time. On `Ctrl+C` shutdown, a final verbose summary is also printed to the console.
+
+Outputs written to `snmp_anomaly_detection/outputs/power_dual/`:
+
+| File | Description |
+|------|-------------|
+| `anomaly_results.csv` | Per-window scores: device, timestamps, errors, thresholds, all flags — identical schema to `detect-power-csv` |
+| `detection_summary.json` | Aggregate counts by device / vendor / category, collapsed event count |
+| `anomaly_windows_detail.json` | Per-event detail with full timestep error sequences, peak timestep, top contributing features — same format as `detect-power-csv` |
+| `kafka_power_results.jsonl` | Append-only raw stream log (one JSON line per scored window, written in real time) |
+
+> **Note:** `true_label` and `anomaly_types` are always `0` / `[]` in Kafka output since ground truth is not available at inference time.
 
 ### Output file map
 
@@ -520,8 +613,10 @@ snmp_anomaly_detection/
 │   │   ├── phase_scaler.pkl                   # phase RobustScaler (with imbalance clipping)
 │   │   └── phase_metadata.json
 │   ├── power_dual/
-│   │   ├── anomaly_results.csv                # per-window dual-model scores
-│   │   └── detection_summary.json             # aggregate counts by model
+│   │   ├── anomaly_results.csv                # per-window scores — CSV and Kafka, identical schema
+│   │   ├── detection_summary.json             # aggregate counts by device/vendor/category
+│   │   ├── anomaly_windows_detail.json        # per-event timestep breakdown + top features
+│   │   └── kafka_power_results.jsonl          # raw Kafka stream log (append-only, runtime)
 │   └── battery_rul/
 │       ├── rul_model.pt                       # RUL regression LSTM
 │       ├── rul_scaler.pkl
@@ -544,17 +639,21 @@ snmp_anomaly_detection/
 
 ### Feature sets
 
-**Baseline UPS features (10):** `battery_charge_pct`, `battery_voltage_v`, `battery_temperature_c`, `runtime_remaining_min`, `input_voltage_avg`, `input_frequency_hz`, `output_load_pct`, `output_power_w`, `on_battery_flag`, `bypass_flag`
+**Baseline UPS features (18):**
+Core health signals: `battery_charge_pct`, `battery_voltage_v`, `battery_current_a`, `battery_temperature_c`, `runtime_remaining_min`, `on_battery_status`, `battery_replace_status`, `input_voltage_v`, `input_frequency_hz`, `output_voltage_v`, `output_current_a`, `output_load_pct`, `output_frequency_hz`, `output_power_w`
+Rate-of-change (all signed-log1p compressed): `runtime_delta`, `battery_charge_delta`, `temperature_delta`, `output_load_delta`
 
-**Phase-level features (21):** all baseline features + `input_voltage_l1/l2/l3`, `input_current_l1/l2/l3`, `output_current_l1/l2/l3`, `voltage_imbalance_pct`, `current_skew_pct`
+**Phase-level features (29):** all 18 baseline features + `input_voltage_l1/l2/l3`, `input_current_l1/l2/l3`, `output_current_l1/l2/l3`, `voltage_imbalance_pct`, `current_skew_pct`
 
-**Battery RUL features (6):** `battery_charge_pct`, `battery_voltage_v`, `battery_temperature_c`, `runtime_remaining_min`, `charge_rate`, `discharge_cycles_approx`
+**Battery RUL features (7):** `battery_charge_pct`, `battery_voltage_v`, `battery_current_a`, `battery_temperature_c`, `runtime_remaining_min`, `charge_rate`, `discharge_cycles_approx`
 
-### Known issues and limitations
+### Known issues and limitations (updated 2026-04-27)
 
 | Issue | Details |
 |-------|---------|
-| RUL accuracy requires real data | Synthetic 7-day window gives MAE ~1,647 days; need months of real battery telemetry |
-| Phase model instability | Near-zero IQR on imbalance features for single-phase devices causes overflow; fixed by clipping to [0, 10%] before RobustScaler |
-| Scaler overwrite bug (fixed) | `PHASE_LEVEL_FEATURES ⊃ BASELINE_UPS_FEATURES` — must scale into separate arrays, not the same df |
-| Kafka Phase 5 not testable without Kafka | Streaming code is complete but requires a running Kafka broker |
+| overload recall 0.653 | Normal load variance (std=25%) overlaps with moderate overload (65–100%). Rule only fires above 100%. |
+| phase_sag recall 0.539 | Small voltage dips still below phase model threshold for many events |
+| ups_lie_01 recall 0.727 | 3-phase Liebert UPS — imbalance features near-zero during many faults |
+| RUL accuracy | Synthetic 7-day window: MAE ~1,647 days. Meaningful RUL needs months of real battery telemetry |
+| Kafka Phase 5 | Streaming code complete but requires a running Kafka broker |
+

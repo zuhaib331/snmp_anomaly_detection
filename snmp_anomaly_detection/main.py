@@ -126,6 +126,8 @@ def main() -> None:
     # Power domain pipeline
     elif args.step in _POWER_STEPS:
         power_steps = _import_power_steps()
+        if args.step == "produce-power-kafka-test":
+            sys.argv = forwarded_argv
         power_steps[args.step]()
 
 

@@ -51,7 +51,9 @@ class DualModelResult:
     phase_error: float
     phase_threshold: float
     phase_anomaly: int
-    combined_flag: int          # determined by alert policy
+    combined_flag: int          # determined by alert policy (OR/AND of LSTM signals)
+    overload_rule_flag: int     # rule: output_load_pct > 100 in any window timestep
+    final_flag: int             # combined_flag OR overload_rule_flag
     alert_policy: str
     true_label: int = 0
     anomaly_types: list[str] = field(default_factory=list)
@@ -84,6 +86,11 @@ def _load_model(model_path: Path, meta: dict) -> "LSTMAutoencoder":
 # Features excluded from attribution — confirmed zero ground-truth deviation
 _ATTRIBUTION_EXCLUDE: frozenset[str] = frozenset({"input_frequency_hz"})
 
+# output_frequency_hz is the UPS inverter output frequency — a real fault signal for UPS.
+# For PDU/network/env it is ambient line frequency (grid noise), not a device health indicator.
+# Exclude its MSE contribution for non-UPS categories to prevent scaler-amplified false positives.
+_NON_UPS_MSE_EXCLUDE: frozenset[str] = frozenset({"output_frequency_hz"})
+
 
 def _score_window_detailed(
     model,
@@ -91,6 +98,7 @@ def _score_window_detailed(
     feature_names: list[str],
     normal_feature_errors: dict[str, float],
     normal_feature_error_stds: dict[str, float],
+    mse_exclude: frozenset[str] = frozenset(),
 ) -> dict:
     loss_fn = torch.nn.MSELoss(reduction="none")
     tensor = torch.tensor(window[np.newaxis], dtype=torch.float32)  # (1, seq_len, n_feat)
@@ -98,8 +106,16 @@ def _score_window_detailed(
         recon = model(tensor)
         errors = loss_fn(recon, tensor).squeeze(0).cpu().numpy()  # (seq_len, n_feat)
 
-    timestep_errors = errors.mean(axis=1)   # (seq_len,)
-    feature_errors = errors.mean(axis=0)    # (n_feat,)
+    # Active columns exclude mse_exclude features from mean_error and timestep_errors.
+    # feature_errors keeps all columns so attribution z-scores remain accurate.
+    if mse_exclude:
+        active_cols = [j for j, f in enumerate(feature_names) if f not in mse_exclude]
+        errors_active = errors[:, active_cols]
+    else:
+        errors_active = errors
+
+    timestep_errors = errors_active.mean(axis=1)   # (seq_len,)
+    feature_errors = errors.mean(axis=0)            # (n_feat,) — full, for attribution
 
     # Z-score surprise: how many std-devs above the normal reconstruction error
     # Handles high-variance features correctly; clipped to 0 (only care about worse-than-normal)
@@ -125,7 +141,7 @@ def _score_window_detailed(
         if j < len(feature_names) and surprise[j] > 0.0
     ]
     return {
-        "mean_error": float(errors.mean()),
+        "mean_error": float(errors_active.mean()),
         "timestep_errors": [round(float(e), 6) for e in timestep_errors],
         "peak_timestep_idx": peak_idx,
         "top_features": ",".join(top_features),
@@ -149,6 +165,7 @@ def run_dual_detection(
     baseline_seq_len = baseline_meta["seq_len"]
     baseline_normal_errors = baseline_meta.get("normal_feature_errors", {})
     baseline_normal_stds   = baseline_meta.get("normal_feature_error_stds", {})
+    baseline_cat_thresholds = baseline_meta.get("per_category_thresholds", {})
 
     # Load phase artifacts
     with open(paths.power_phase_outputs_dir / "phase_metadata.json") as f:
@@ -159,6 +176,7 @@ def run_dual_detection(
     phase_seq_len = phase_meta["seq_len"]
     phase_normal_errors = phase_meta.get("normal_feature_errors", {})
     phase_normal_stds   = phase_meta.get("normal_feature_error_stds", {})
+    phase_cat_thresholds = phase_meta.get("per_category_thresholds", {})
 
     # Load and preprocess dataset
     df = load_power_dataset(paths)
@@ -181,6 +199,10 @@ def run_dual_detection(
         vendor = str(device_df["vendor"].iloc[0]) if "vendor" in device_df.columns else "unknown"
         phase_count = int(device_df["phase_count"].iloc[0]) if "phase_count" in device_df.columns else 1
 
+        # Use per-category threshold when available (tighter for env/network, wider for ups)
+        b_threshold = baseline_cat_thresholds.get(device_category, baseline_threshold)
+        p_threshold = phase_cat_thresholds.get(device_category, phase_threshold)
+
         # Apply imbalance clipping before phase scaling (same as training transform)
         phase_df = device_df.copy()
         for col in _IMBALANCE_COLS:
@@ -195,6 +217,9 @@ def run_dual_detection(
         timestamps = device_df["timestamp"].astype(str).values
         labels = device_df["anomaly"].values
         anomaly_types = device_df.get("anomaly_type", pd.Series(["none"] * len(device_df))).values
+        # Raw output_load_pct (unscaled) — used for rule-based overload detection.
+        # Normal operation: output_load_pct ≤ 100.  Any reading > 100 is definitively overload.
+        raw_load_pct = device_df["output_load_pct"].values if "output_load_pct" in device_df.columns else None
 
         seq_len = max(baseline_seq_len, phase_seq_len)
         for i in range(len(device_df) - seq_len):
@@ -202,18 +227,29 @@ def run_dual_detection(
             p_win = phase_vals[i : i + phase_seq_len]
             win_timestamps = timestamps[i : i + seq_len].tolist()
 
-            b_detail = _score_window_detailed(baseline_model, b_win, baseline_cols, baseline_normal_errors, baseline_normal_stds)
-            p_detail = _score_window_detailed(phase_model, p_win, phase_cols, phase_normal_errors, phase_normal_stds)
+            mse_excl = _NON_UPS_MSE_EXCLUDE if device_category != "ups" else frozenset()
+            b_detail = _score_window_detailed(baseline_model, b_win, baseline_cols, baseline_normal_errors, baseline_normal_stds, mse_excl)
+            p_detail = _score_window_detailed(phase_model, p_win, phase_cols, phase_normal_errors, phase_normal_stds, mse_excl)
 
             b_err = b_detail["mean_error"]
             p_err = p_detail["mean_error"]
-            b_flag = int(b_err > baseline_threshold)
-            p_flag = int(p_err > phase_threshold)
+            b_flag = int(b_err > b_threshold)
+            p_flag = int(p_err > p_threshold)
 
             if policy == "or":
                 combined = int(b_flag or p_flag)
             else:
                 combined = int(b_flag and p_flag)
+
+            # Rule-based overload: output_load_pct > 100 is physically impossible during normal
+            # operation (synthetic data caps normal at 100). Zero false-positive supplement.
+            overload_rule = 0
+            if raw_load_pct is not None:
+                win_load = raw_load_pct[i : i + seq_len]
+                if win_load.max() > 100.0:
+                    overload_rule = 1
+
+            final = int(combined or overload_rule)
 
             true_label = int(labels[i : i + seq_len].max())
             seen_types = list({t for t in anomaly_types[i : i + seq_len] if t != "none"})
@@ -229,12 +265,14 @@ def run_dual_detection(
                 window_start=win_timestamps[0],
                 window_end=win_timestamps[-1],
                 baseline_error=round(b_err, 6),
-                baseline_threshold=baseline_threshold,
+                baseline_threshold=b_threshold,
                 baseline_anomaly=b_flag,
                 phase_error=round(p_err, 6),
-                phase_threshold=phase_threshold,
+                phase_threshold=p_threshold,
                 phase_anomaly=p_flag,
                 combined_flag=combined,
+                overload_rule_flag=overload_rule,
+                final_flag=final,
                 alert_policy=policy,
                 true_label=true_label,
                 anomaly_types=seen_types,
@@ -250,7 +288,35 @@ def run_dual_detection(
     return results
 
 
-def save_dual_results(results: list[DualModelResult], paths: ProjectPaths) -> None:
+def _collapse_to_events(flagged: list[DualModelResult]) -> list[DualModelResult]:
+    """Merge overlapping flagged windows per device into one event.
+
+    With stride=1 a single anomaly produces ~seq_len consecutive flagged windows.
+    This collapses them into one representative (highest combined error) so that
+    summary counts and the detail JSON reflect real events, not window counts.
+    """
+    if not flagged:
+        return []
+
+    events: list[DualModelResult] = []
+    by_device: dict[str, list[DualModelResult]] = {}
+    for r in flagged:
+        by_device.setdefault(r.device_id, []).append(r)
+
+    for rows in by_device.values():
+        group: list[DualModelResult] = [rows[0]]
+        for prev, curr in zip(rows, rows[1:]):
+            if pd.Timestamp(curr.window_start) <= pd.Timestamp(prev.window_end):
+                group.append(curr)
+            else:
+                events.append(max(group, key=lambda r: r.baseline_error + r.phase_error))
+                group = [curr]
+        events.append(max(group, key=lambda r: r.baseline_error + r.phase_error))
+
+    return events
+
+
+def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, silent: bool = False) -> None:
     paths.ensure_power_directories()
     rows = [asdict(r) for r in results]
     df = pd.DataFrame(rows)
@@ -274,7 +340,9 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths) -> No
         entry["total_windows"] += 1
         entry["flagged_baseline"] += r.baseline_anomaly
         entry["flagged_phase"] += r.phase_anomaly
+        entry["flagged_overload_rule"] = entry.get("flagged_overload_rule", 0) + r.overload_rule_flag
         entry["flagged_combined"] += r.combined_flag
+        entry["flagged_final"] = entry.get("flagged_final", 0) + r.final_flag
         entry["true_anomaly_windows"] += r.true_label
 
     # --- Per-vendor breakdown ---
@@ -283,11 +351,11 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths) -> No
         entry = by_vendor.setdefault(r.vendor, {
             "vendor": r.vendor,
             "total_windows": 0,
-            "flagged_combined": 0,
+            "flagged_final": 0,
             "true_anomaly_windows": 0,
         })
         entry["total_windows"] += 1
-        entry["flagged_combined"] += r.combined_flag
+        entry["flagged_final"] += r.final_flag
         entry["true_anomaly_windows"] += r.true_label
 
     # --- Per-category breakdown ---
@@ -296,20 +364,27 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths) -> No
         entry = by_category.setdefault(r.device_category, {
             "device_category": r.device_category,
             "total_windows": 0,
-            "flagged_combined": 0,
+            "flagged_final": 0,
             "true_anomaly_windows": 0,
         })
         entry["total_windows"] += 1
-        entry["flagged_combined"] += r.combined_flag
+        entry["flagged_final"] += r.final_flag
         entry["true_anomaly_windows"] += r.true_label
+
+    flagged = [r for r in results if r.final_flag == 1]
+    events = _collapse_to_events(flagged)
 
     summary = {
         "alert_policy": results[0].alert_policy if results else "or",
         "total_windows": len(results),
         "flagged_by_baseline": sum(r.baseline_anomaly for r in results),
         "flagged_by_phase": sum(r.phase_anomaly for r in results),
+        "flagged_by_overload_rule": sum(r.overload_rule_flag for r in results),
         "flagged_combined": sum(r.combined_flag for r in results),
+        "flagged_final": sum(r.final_flag for r in results),
         "true_anomaly_windows": sum(r.true_label for r in results),
+        "total_anomaly_events": len(events),
+        "true_anomaly_events": sum(r.true_label for r in events),
         "by_device": list(by_device.values()),
         "by_vendor": list(by_vendor.values()),
         "by_category": list(by_category.values()),
@@ -317,11 +392,11 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths) -> No
     with open(paths.power_dual_outputs_dir / "detection_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    # --- Flagged window detail JSON ---
-    flagged = [r for r in results if r.combined_flag == 1]
+    # --- Flagged event detail JSON (one entry per real anomaly event, duplicates collapsed) ---
     detail_rows = []
-    for r in flagged:
+    for event_number, r in enumerate(events, start=1):
         detail_rows.append({
+            "event_number": event_number,
             "device_id": r.device_id,
             "device_category": r.device_category,
             "vendor": r.vendor,
@@ -356,25 +431,29 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths) -> No
     with open(detail_path, "w") as f:
         json.dump(detail_rows, f, indent=2)
 
-    print(f"Results:        {csv_path}")
-    print(f"Window detail:  {detail_path}")
-    print(f"Windows flagged (combined): {summary['flagged_combined']} / {summary['total_windows']}")
-    print("\nFlagged by device:")
-    for d in summary["by_device"]:
-        print(f"  {d['device_id']:15s} [{d['device_category']:7s} / {d['vendor']:8s}]  flagged={d['flagged_combined']:4d} / {d['total_windows']}")
+    if not silent:
+        print(f"Results:        {csv_path}")
+        print(f"Event detail:   {detail_path}")
+        print(f"Windows flagged (LSTM):    {summary['flagged_combined']} / {summary['total_windows']}")
+        print(f"Windows flagged (rule):    {summary['flagged_by_overload_rule']} / {summary['total_windows']}")
+        print(f"Windows flagged (final):   {summary['flagged_final']} / {summary['total_windows']}")
+        print(f"Anomaly events (deduped):  {summary['total_anomaly_events']}  (true={summary['true_anomaly_events']})")
+        print("\nFlagged by device:")
+        for d in summary["by_device"]:
+            print(f"  {d['device_id']:15s} [{d['device_category']:7s} / {d['vendor']:8s}]  flagged={d.get('flagged_final',0):4d} / {d['total_windows']}")
 
-    if flagged:
-        print(f"\nSample anomaly windows (first 5 of {len(flagged)}):")
-        for r in flagged[:5]:
-            print(f"\n  [{r.device_id}] {r.window_start} → {r.window_end}  types={r.anomaly_types}")
-            if r.baseline_anomaly:
-                print(f"    baseline: error={r.baseline_error:.6f} > thresh={r.baseline_threshold:.6f}")
-                print(f"             peak_at={r.baseline_peak_timestep}  top_features=[{r.baseline_top_features}]")
-                print(f"             sequence_errors={r.baseline_timestep_errors}")
-            if r.phase_anomaly:
-                print(f"    phase:    error={r.phase_error:.6f} > thresh={r.phase_threshold:.6f}")
-                print(f"             peak_at={r.phase_peak_timestep}  top_features=[{r.phase_top_features}]")
-                print(f"             sequence_errors={r.phase_timestep_errors}")
+        if events:
+            print(f"\nSample anomaly events (first 5 of {len(events)}):")
+            for r in events[:5]:
+                print(f"\n  [{r.device_id}] {r.window_start} → {r.window_end}  types={r.anomaly_types}")
+                if r.baseline_anomaly:
+                    print(f"    baseline: error={r.baseline_error:.6f} > thresh={r.baseline_threshold:.6f}")
+                    print(f"             peak_at={r.baseline_peak_timestep}  top_features=[{r.baseline_top_features}]")
+                    print(f"             sequence_errors={r.baseline_timestep_errors}")
+                if r.phase_anomaly:
+                    print(f"    phase:    error={r.phase_error:.6f} > thresh={r.phase_threshold:.6f}")
+                    print(f"             peak_at={r.phase_peak_timestep}  top_features=[{r.phase_top_features}]")
+                    print(f"             sequence_errors={r.phase_timestep_errors}")
 
 
 def main() -> None:

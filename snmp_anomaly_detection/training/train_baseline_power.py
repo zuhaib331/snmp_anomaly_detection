@@ -40,7 +40,7 @@ def _compute_errors(model, tensor_data) -> np.ndarray:
 
 
 def train_baseline_power(
-    seq_len: int = 10,
+    seq_len: int | None = None,
     config: PowerTrainingConfig | None = None,
     paths: ProjectPaths | None = None,
 ) -> dict:
@@ -48,6 +48,7 @@ def train_baseline_power(
     config = config or PowerTrainingConfig()
     paths = paths or ProjectPaths()
     paths.ensure_power_directories()
+    seq_len = seq_len if seq_len is not None else config.seq_len
 
     # Build time-split sequences using normal-only training partition
     df = load_power_dataset(paths)
@@ -91,7 +92,9 @@ def train_baseline_power(
     loss_fn_no_reduce = torch.nn.MSELoss(reduction="none")
     train_tensor = torch.tensor(x_train, dtype=torch.float32)
     train_errors = _compute_errors(model, train_tensor)
-    threshold = float(train_errors.mean() + config.threshold_std_multiplier * train_errors.std())
+    # Percentile-based threshold is robust to heavy-tailed error distributions
+    # (e.g. Liebert 3-phase UPS devices whose normal variance makes mean+k*std too tight).
+    threshold = float(np.percentile(train_errors, 99.9))
 
     # Per-feature reconstruction stats on normal training data (mean + std for z-score attribution)
     feature_names = [c for c in BASELINE_UPS_FEATURES if c in scaled_train.columns]
@@ -103,6 +106,20 @@ def train_baseline_power(
     per_feat_std  = per_seq_feat.std(axis=0)
     normal_feature_errors = {f: round(float(e), 8) for f, e in zip(feature_names, per_feat_mean)}
     normal_feature_error_stds = {f: round(float(e), 8) for f, e in zip(feature_names, per_feat_std)}
+
+    # Per-category thresholds — each device category has its own reconstruction error range.
+    # Categories with lower normal errors (env, network) get a tighter threshold so soft
+    # anomalies (overload on env device) are not swamped by the global UPS-dominated baseline.
+    per_category_thresholds: dict[str, float] = {}
+    if "device_category" in scaled_train.columns:
+        for cat, cat_df in scaled_train.groupby("device_category"):
+            x_cat = build_baseline_sequences(cat_df, seq_len)
+            if len(x_cat) > 0:
+                cat_tensor = torch.tensor(x_cat, dtype=torch.float32)
+                cat_errors = _compute_errors(model, cat_tensor)
+                per_category_thresholds[str(cat)] = round(
+                    float(np.percentile(cat_errors, 99.9)), 8
+                )
 
     # Val errors for reporting
     val_tensor = torch.tensor(x_val, dtype=torch.float32)
@@ -124,6 +141,7 @@ def train_baseline_power(
         "feature_names": feature_names,
         "normal_feature_errors": normal_feature_errors,
         "normal_feature_error_stds": normal_feature_error_stds,
+        "per_category_thresholds": per_category_thresholds,
     }
     with open(paths.power_outputs_dir / "baseline_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
