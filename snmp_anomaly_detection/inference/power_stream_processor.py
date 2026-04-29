@@ -70,6 +70,8 @@ class PowerEvent:
     feature_values: dict[str, float]   # canonical feature name → value
     phase_count: int = 1               # 1 (single-phase) or 3 (three-phase)
     session_reset: bool = False        # clears stale per-device delta state on new producer run
+    true_label: int = 0                # ground-truth flag from test producer (0 in production)
+    anomaly_type: str = "none"         # ground-truth type from test producer ("none" in production)
 
     def get_baseline_vector(self) -> list[float]:
         return [self.feature_values.get(c, 0.0) for c in BASELINE_UPS_FEATURES]
@@ -151,6 +153,13 @@ class PowerStreamProcessor:
         )
         # Per-device last-seen values for delta feature computation
         self._prev_raw: dict[str, dict[str, float]] = {}
+        # Per-device ground-truth label buffers (aligned with baseline window)
+        self._true_label_buffers: dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=self._baseline_meta["seq_len"])
+        )
+        self._anomaly_type_buffers: dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=self._baseline_meta["seq_len"])
+        )
         # Recent anomaly timestamps for compound alert correlation
         self._recent_ups_anomalies: deque[tuple[str, datetime]] = deque(maxlen=100)
         self._recent_pdu_anomalies: deque[tuple[str, datetime]] = deque(maxlen=100)
@@ -201,6 +210,8 @@ class PowerStreamProcessor:
         # run. Clearing it prevents a large delta spike on the first scored window.
         if event.session_reset:
             self._prev_raw.pop(event.device_id, None)
+            self._true_label_buffers.pop(event.device_id, None)
+            self._anomaly_type_buffers.pop(event.device_id, None)
 
         fv = event.feature_values
 
@@ -298,8 +309,10 @@ class PowerStreamProcessor:
         # Apply log1p + delta features before scaling (mirrors training preprocessing)
         self._apply_preprocessing(event)
 
-        # Track timestamp and raw output_load_pct (unscaled) for overload rule
+        # Track timestamp, ground-truth labels, and raw output_load_pct for overload rule
         self._ts_buffers[event.device_id].append(str(event.timestamp))
+        self._true_label_buffers[event.device_id].append(event.true_label)
+        self._anomaly_type_buffers[event.device_id].append(event.anomaly_type)
         self._load_pct_buffers[event.device_id].append(
             event.feature_values.get("output_load_pct", 0.0)
         )
@@ -330,6 +343,11 @@ class PowerStreamProcessor:
 
         win_timestamps = list(self._ts_buffers[event.device_id])
         win_load_pct = list(self._load_pct_buffers[event.device_id])
+        win_true_label = int(any(self._true_label_buffers[event.device_id]))
+        win_anomaly_types = list({
+            t for t in self._anomaly_type_buffers[event.device_id]
+            if t and t != "none"
+        })
 
         mse_excl = _NON_UPS_MSE_EXCLUDE if event.device_category != "ups" else frozenset()
         b_detail = self._score_detailed(
@@ -405,4 +423,6 @@ class PowerStreamProcessor:
             alert_policy=policy,
             compound_alert=compound,
             compound_alert_peer=peer,
+            true_label=win_true_label,
+            anomaly_types=win_anomaly_types,
         )

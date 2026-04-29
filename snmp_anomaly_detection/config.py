@@ -147,7 +147,7 @@ class TrainingConfig:
     learning_rate: float = 1e-3
     hidden_size: int = 64
     latent_size: int = 32
-    threshold_std_multiplier: float = 2.0
+    threshold_std_multiplier: float = 3.0
 
 
 @dataclass(frozen=True)

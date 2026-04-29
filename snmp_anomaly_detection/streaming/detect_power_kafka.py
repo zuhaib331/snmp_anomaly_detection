@@ -66,6 +66,8 @@ def _parse_power_event(payload: dict) -> PowerEvent | None:
         feature_values=feature_values,
         phase_count=int(payload.get("phase_count", 1)),
         session_reset=bool(payload.get("_device_reset", False)),
+        true_label=int(payload.get("expected_label", 0)),
+        anomaly_type=str(payload.get("expected_anomaly_type", "none")),
     )
 
 
@@ -88,8 +90,8 @@ def _to_dual_result(r: PowerScoringResult) -> DualModelResult:
         overload_rule_flag=r.overload_rule_flag,
         final_flag=r.final_flag,
         alert_policy=r.alert_policy,
-        true_label=0,          # not available at inference time
-        anomaly_types=[],      # not available at inference time
+        true_label=r.true_label,
+        anomaly_types=r.anomaly_types,
         window_timestamps=r.window_timestamps,
         baseline_timestep_errors=r.baseline_timestep_errors,
         baseline_peak_timestep=r.baseline_peak_timestep,
