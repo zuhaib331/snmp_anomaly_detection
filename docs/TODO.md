@@ -8,9 +8,9 @@
 <!-- ================================================================ -->
 
 ## F1 — Fix `TrainingConfig.threshold_std_multiplier` regression in network pipeline
-**Status:** Pending  
+**Status:** Done — 2026-04-29  
 **Priority:** Critical — silent breakage of existing network pipeline threshold; no test to catch it  
-**File:** [config.py:104](../snmp_anomaly_detection/config.py#L104)
+**File:** [config.py:150](../snmp_anomaly_detection/config.py#L150)
 
 ### Issue
 `TrainingConfig.threshold_std_multiplier` was changed from `3.0` to `2.0` in this branch. `TrainingConfig` is used by the **network** pipeline's `train_model.py`, not only the power pipeline. Lowering to 2σ raises false-positive rates on network anomaly detection without any network-side evaluation.
@@ -21,7 +21,7 @@ Revert `TrainingConfig.threshold_std_multiplier` back to `3.0`. Power models alr
 ---
 
 ## F2 — Fix validation scaler data leakage in `train_baseline_power.py`
-**Status:** Pending  
+**Status:** Done — 2026-04-29  
 **Priority:** High — validation split is scaled with its own fitted scaler, not the training scaler  
 **File:** [train_baseline_power.py:710](../snmp_anomaly_detection/training/train_baseline_power.py#L710)
 
@@ -44,7 +44,7 @@ Remove the `baseline_val_scaler.pkl` artifact path.
 ---
 
 ## F3 — Fix `preprocess-power` producing sequences without delta features
-**Status:** Pending  
+**Status:** Done — 2026-04-29  
 **Priority:** High — `X_train.npy` from `preprocess-power` has 14 features; training uses 16  
 **File:** [power_features.py:727](../snmp_anomaly_detection/preprocessing/power_features.py#L727)
 
@@ -133,7 +133,7 @@ ups_df = df[df["device_category"] == "ups"].copy()
 ---
 
 ## B1 — Per-device online threshold in PowerStreamProcessor
-**Status:** Pending  
+**Status:** Done — 2026-04-29  
 **Priority:** High — fixes current FPs, scales to millions of devices, no retraining required  
 **Depends on:** Nothing (can start immediately)
 

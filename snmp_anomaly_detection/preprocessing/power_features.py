@@ -114,6 +114,7 @@ def run_power_feature_engineering(
     df = load_power_dataset(paths)
     df = aggregate_phase_metrics(df)
     df = apply_log1p_skewed(df)
+    df = add_delta_features(df)
     train_df = filter_normal_rows(df)
     scaled_df, _ = scale_features(train_df, paths)
     sequences = build_baseline_sequences(scaled_df, seq_len)

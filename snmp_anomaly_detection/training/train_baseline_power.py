@@ -57,8 +57,10 @@ def train_baseline_power(
     df = add_delta_features(df)
     normal_df = filter_normal_rows(df)
     train_df, val_df, _ = time_based_split(normal_df)
-    scaled_train, _ = scale_features(train_df, paths)
-    scaled_val, _ = scale_features(val_df, paths, paths.power_outputs_dir / "baseline_val_scaler.pkl")
+    scaled_train, train_scaler = scale_features(train_df, paths)
+    val_feature_cols = [c for c in BASELINE_UPS_FEATURES if c in val_df.columns]
+    scaled_val = val_df.copy()
+    scaled_val[val_feature_cols] = train_scaler.transform(scaled_val[val_feature_cols])
 
     x_train = build_baseline_sequences(scaled_train, seq_len)
     x_val = build_baseline_sequences(scaled_val, seq_len)

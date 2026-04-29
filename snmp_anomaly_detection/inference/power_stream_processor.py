@@ -62,6 +62,16 @@ _EPS = 1e-9
 
 
 @dataclass
+class DeviceErrorStats:
+    """Per-device, per-model calibration state for B1 online threshold."""
+    calibration_errors: list  # collected during cold-start; cleared after calibration
+    calibrated: bool           # True once n_calibration_windows normal errors observed
+    rolling_mean: float        # Welford running mean (post-calibration)
+    rolling_m2: float          # Welford M2 accumulator (sum of squared deviations)
+    n_windows: int             # total windows used in rolling stats
+
+
+@dataclass
 class PowerEvent:
     timestamp: datetime
     device_id: str
@@ -110,6 +120,7 @@ class PowerScoringResult:
     alert_policy: str
     compound_alert: bool
     compound_alert_peer: str = ""
+    calibration_status: str = "live"  # "calibrating" (cold-start) or "live" (device threshold active)
     # Ground-truth fields — unavailable at inference time; kept for schema parity
     true_label: int = 0
     anomaly_types: list[str] = field(default_factory=list)
@@ -163,6 +174,13 @@ class PowerStreamProcessor:
         # Recent anomaly timestamps for compound alert correlation
         self._recent_ups_anomalies: deque[tuple[str, datetime]] = deque(maxlen=100)
         self._recent_pdu_anomalies: deque[tuple[str, datetime]] = deque(maxlen=100)
+        # B1 — per-device online threshold calibration
+        self._n_cal = self._config.n_calibration_windows
+        self._thresh_k = self._config.online_threshold_k
+        self._safety_mult = self._config.calibration_safety_multiplier
+        self._device_stats: dict[str, dict[str, DeviceErrorStats]] = {}
+        self._windows_since_save: int = 0
+        self._load_device_stats()
 
     def _load_models(self) -> None:
         p = self._paths
@@ -180,6 +198,7 @@ class PowerStreamProcessor:
         self._baseline_model.eval()
         self._baseline_scaler = joblib.load(p.power_outputs_dir / "baseline_scaler.pkl")
         self._baseline_threshold: float = self._baseline_meta["threshold"]
+        self._baseline_cat_thresholds: dict[str, float] = self._baseline_meta.get("per_category_thresholds", {})
         self._baseline_normal_errors: dict[str, float] = self._baseline_meta.get("normal_feature_errors", {})
         self._baseline_normal_stds: dict[str, float] = self._baseline_meta.get("normal_feature_error_stds", {})
 
@@ -196,8 +215,121 @@ class PowerStreamProcessor:
         self._phase_model.eval()
         self._phase_scaler = joblib.load(p.power_phase_outputs_dir / "phase_scaler.pkl")
         self._phase_threshold: float = self._phase_meta["threshold"]
+        self._phase_cat_thresholds: dict[str, float] = self._phase_meta.get("per_category_thresholds", {})
         self._phase_normal_errors: dict[str, float] = self._phase_meta.get("normal_feature_errors", {})
         self._phase_normal_stds: dict[str, float] = self._phase_meta.get("normal_feature_error_stds", {})
+
+    # ------------------------------------------------------------------
+    # B1 — per-device online threshold helpers
+    # ------------------------------------------------------------------
+
+    def _get_stats(self, device_id: str, model_key: str) -> DeviceErrorStats:
+        if device_id not in self._device_stats:
+            self._device_stats[device_id] = {}
+        if model_key not in self._device_stats[device_id]:
+            self._device_stats[device_id][model_key] = DeviceErrorStats(
+                calibration_errors=[], calibrated=False,
+                rolling_mean=0.0, rolling_m2=0.0, n_windows=0,
+            )
+        return self._device_stats[device_id][model_key]
+
+    def _get_device_threshold(
+        self, device_id: str, model_key: str, category: str
+    ) -> tuple[float, bool]:
+        """Return (threshold, is_calibrated).
+
+        Fallback chain: device threshold → per-category threshold × safety_mult → global × safety_mult.
+        During cold-start the safety multiplier keeps the threshold high enough to suppress
+        normal OOD reconstruction noise without masking catastrophic faults.
+        """
+        stats = self._get_stats(device_id, model_key)
+        if stats.calibrated:
+            std = (stats.rolling_m2 / max(stats.n_windows - 1, 1)) ** 0.5
+            return stats.rolling_mean + self._thresh_k * std, True
+        global_thresh = self._baseline_threshold if model_key == "baseline" else self._phase_threshold
+        cat_thresholds = self._baseline_cat_thresholds if model_key == "baseline" else self._phase_cat_thresholds
+        cat_thresh = cat_thresholds.get(category, global_thresh)
+        return cat_thresh * self._safety_mult, False
+
+    def _update_stats(self, device_id: str, model_key: str, error: float, category: str) -> None:
+        """Update DeviceErrorStats for one scored window using Welford online algorithm.
+
+        Anomalous windows (clearly above current threshold) are locked out so a real fault
+        cannot inflate the device's normal baseline.
+        """
+        stats = self._get_stats(device_id, model_key)
+        global_thresh = self._baseline_threshold if model_key == "baseline" else self._phase_threshold
+        cat_thresholds = self._baseline_cat_thresholds if model_key == "baseline" else self._phase_cat_thresholds
+        cat_thresh = cat_thresholds.get(category, global_thresh)
+
+        if not stats.calibrated:
+            # During cold-start: skip windows that are clearly fault-driven
+            if error > self._safety_mult * cat_thresh:
+                return
+            stats.calibration_errors.append(error)
+            if len(stats.calibration_errors) >= self._n_cal:
+                errors = stats.calibration_errors
+                mean = sum(errors) / len(errors)
+                m2 = sum((e - mean) ** 2 for e in errors)
+                stats.calibrated = True
+                stats.rolling_mean = mean
+                stats.rolling_m2 = m2
+                stats.n_windows = len(errors)
+                stats.calibration_errors = []  # free memory
+                device_thresh = mean + self._thresh_k * (m2 / max(len(errors) - 1, 1)) ** 0.5
+                print(
+                    f"[B1] {device_id}/{model_key} calibrated — "
+                    f"mean={mean:.6f}  threshold={device_thresh:.6f}"
+                )
+                self._save_device_stats()
+        else:
+            # Live: lock out windows that are anomalous (> 2.5× current device threshold)
+            std = (stats.rolling_m2 / max(stats.n_windows - 1, 1)) ** 0.5
+            live_thresh = stats.rolling_mean + self._thresh_k * std
+            if error > 2.5 * live_thresh:
+                return
+            # Welford online update
+            stats.n_windows += 1
+            delta = error - stats.rolling_mean
+            stats.rolling_mean += delta / stats.n_windows
+            delta2 = error - stats.rolling_mean
+            stats.rolling_m2 += delta * delta2
+
+    def _load_device_stats(self) -> None:
+        stats_file = self._paths.device_stats_file
+        if not stats_file.exists():
+            return
+        with open(stats_file) as f:
+            raw = json.load(f)
+        for device_id, models in raw.items():
+            self._device_stats[device_id] = {}
+            for model_key, s in models.items():
+                self._device_stats[device_id][model_key] = DeviceErrorStats(
+                    calibration_errors=s["calibration_errors"],
+                    calibrated=s["calibrated"],
+                    rolling_mean=s["rolling_mean"],
+                    rolling_m2=s["rolling_m2"],
+                    n_windows=s["n_windows"],
+                )
+
+    def _save_device_stats(self) -> None:
+        stats_file = self._paths.device_stats_file
+        stats_file.parent.mkdir(parents=True, exist_ok=True)
+        raw: dict = {}
+        for device_id, models in self._device_stats.items():
+            raw[device_id] = {}
+            for model_key, stats in models.items():
+                raw[device_id][model_key] = {
+                    "calibration_errors": stats.calibration_errors,
+                    "calibrated": stats.calibrated,
+                    "rolling_mean": stats.rolling_mean,
+                    "rolling_m2": stats.rolling_m2,
+                    "n_windows": stats.n_windows,
+                }
+        with open(stats_file, "w") as f:
+            json.dump(raw, f)
+
+    # ------------------------------------------------------------------
 
     def _apply_preprocessing(self, event: PowerEvent) -> None:
         """Mirror the training transforms applied before scaling.
@@ -349,9 +481,21 @@ class PowerStreamProcessor:
             if t and t != "none"
         })
 
+        # B1 — resolve per-device thresholds (falls back to category × safety_mult during cold-start)
+        b_thresh, b_calibrated = self._get_device_threshold(
+            event.device_id, "baseline", event.device_category
+        )
+        p_thresh, p_calibrated = self._get_device_threshold(
+            event.device_id, "phase", event.device_category
+        )
+        if event.device_category == "ups":
+            cal_status = "live" if (b_calibrated and p_calibrated) else "calibrating"
+        else:
+            cal_status = "live" if b_calibrated else "calibrating"
+
         mse_excl = _NON_UPS_MSE_EXCLUDE if event.device_category != "ups" else frozenset()
         b_detail = self._score_detailed(
-            self._baseline_model, b_window, self._baseline_threshold,
+            self._baseline_model, b_window, b_thresh,
             list(BASELINE_UPS_FEATURES),
             self._baseline_normal_errors, self._baseline_normal_stds,
             mse_excl,
@@ -360,7 +504,7 @@ class PowerStreamProcessor:
         # Phase scoring: UPS only; other categories get zero-filled placeholders
         if event.device_category == "ups" and p_window is not None:
             p_detail = self._score_detailed(
-                self._phase_model, p_window, self._phase_threshold,
+                self._phase_model, p_window, p_thresh,
                 list(PHASE_LEVEL_FEATURES),
                 self._phase_normal_errors, self._phase_normal_stds,
                 mse_excl,
@@ -370,6 +514,18 @@ class PowerStreamProcessor:
                 "mean_error": 0.0, "flag": 0,
                 "timestep_errors": [], "peak_timestep_idx": 0, "top_features": "",
             }
+
+        # Update per-device stats (Welford); anomalous windows are locked out inside _update_stats
+        self._update_stats(event.device_id, "baseline", b_detail["mean_error"], event.device_category)
+        if event.device_category == "ups":
+            self._update_stats(event.device_id, "phase", p_detail["mean_error"], event.device_category)
+
+        # Periodic save — on calibration transitions _save_device_stats is called immediately;
+        # here we flush remaining state every 100 windows to bound data loss on crash
+        self._windows_since_save += 1
+        if self._windows_since_save >= 100:
+            self._save_device_stats()
+            self._windows_since_save = 0
 
         b_flag = b_detail["flag"]
         p_flag = p_detail["flag"]
@@ -404,13 +560,13 @@ class PowerStreamProcessor:
             window_timestamps=win_timestamps,
             baseline_anomaly=b_flag,
             baseline_error=round(b_detail["mean_error"], 6),
-            baseline_threshold=round(self._baseline_threshold, 6),
+            baseline_threshold=round(b_thresh, 6),
             baseline_peak_timestep=win_timestamps[b_peak_idx] if win_timestamps else "",
             baseline_top_features=b_detail["top_features"],
             baseline_timestep_errors=b_detail["timestep_errors"],
             phase_anomaly=p_flag,
             phase_error=round(p_detail["mean_error"], 6),
-            phase_threshold=round(self._phase_threshold, 6),
+            phase_threshold=round(p_thresh, 6),
             phase_peak_timestep=(
                 win_timestamps[p_peak_idx]
                 if win_timestamps and p_detail["timestep_errors"] else ""
@@ -423,6 +579,7 @@ class PowerStreamProcessor:
             alert_policy=policy,
             compound_alert=compound,
             compound_alert_peer=peer,
+            calibration_status=cal_status,
             true_label=win_true_label,
             anomaly_types=win_anomaly_types,
         )

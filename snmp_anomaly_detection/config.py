@@ -109,6 +109,9 @@ class ProjectPaths:
     power_dual_outputs_dir: Path = field(
         default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual"
     )
+    device_stats_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual" / "device_stats.json"
+    )
 
     def ensure_directories(self) -> None:
         for directory in (self.data_dir, self.outputs_dir, self.utils_dir):
@@ -204,3 +207,7 @@ class PowerInferenceConfig:
     rul_warn_days: int = 30
     compound_alert_window_minutes: int = 10
     save_results: bool = True
+    # B1 — per-device online threshold
+    n_calibration_windows: int = 50   # windows observed silently before device threshold locks in
+    online_threshold_k: float = 3.0   # mean + k*std defines the device threshold after calibration
+    calibration_safety_multiplier: float = 3.0  # during cold-start, fire only if error > N × category threshold
