@@ -43,13 +43,9 @@ def derive_rul_labels(df: pd.DataFrame) -> pd.DataFrame:
         vendor = group["vendor"].iloc[0]
         life_years = _VENDOR_LIFE_YEARS.get(str(vendor).lower(), 3.0)
         life_days = life_years * 365
-        # Approximate install age at first row from battery degradation heuristic:
-        # battery_voltage_v ≈ 20 + 6.4 * (charge_pct/100), so infer starting health.
-        # Simpler: use row position * interval to advance age.
-        n = len(group)
-        for i, (idx, row) in enumerate(group.iterrows()):
-            # age grows by (interval_minutes / 1440) days per timestep
-            age_days = i * _INTERVAL_MINUTES / 1440
+        install_age = float(group["install_age_days"].iloc[0]) if "install_age_days" in group.columns else 0.0
+        for i, (idx, _row) in enumerate(group.iterrows()):
+            age_days = install_age + i * _INTERVAL_MINUTES / 1440
             rul = max(life_days - age_days, 0.0)
             rul_rows.append((idx, rul))
 
@@ -67,7 +63,7 @@ def build_rul_sequences(
     Uses only UPS devices (those with non-zero battery_ah proxy: battery_voltage_v > 0).
     """
     feature_cols = [c for c in BATTERY_RUL_FEATURES if c in df.columns]
-    ups_df = df[df["battery_voltage_v"] > 0].copy()
+    ups_df = df[df["device_category"] == "ups"].copy()
 
     all_seqs, all_labels = [], []
     for device_id in ups_df["device_id"].unique():

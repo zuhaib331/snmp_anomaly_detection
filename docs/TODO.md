@@ -61,7 +61,7 @@ Add `df = add_delta_features(df)` after `apply_log1p_skewed` in `run_power_featu
 ---
 
 ## F4 — Fix `derive_rul_labels` ignoring device install age
-**Status:** Pending  
+**Status:** Done — 2026-04-30  
 **Priority:** High — RUL labels for new and end-of-life batteries are identical at dataset start  
 **File:** [battery_features.py:52](../snmp_anomaly_detection/preprocessing/battery_features.py#L52)
 
@@ -118,7 +118,7 @@ p_raw = np.array([[clipped.get(c, 0.0) for c in PHASE_LEVEL_FEATURES]])
 ---
 
 ## F7 — Replace `battery_voltage_v > 0` UPS proxy with `device_category == "ups"`
-**Status:** Pending  
+**Status:** Done — 2026-04-30  
 **Priority:** Low — voltage can be 0 during a fault, causing UPS to be silently excluded from RUL scoring  
 **File:** [rul_eval.py:103](../snmp_anomaly_detection/evaluation/rul_eval.py#L103)
 

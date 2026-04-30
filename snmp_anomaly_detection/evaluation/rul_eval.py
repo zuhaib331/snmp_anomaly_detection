@@ -65,7 +65,10 @@ def evaluate_rul(paths: ProjectPaths | None = None) -> dict:
         print("No test sequences. Run train-battery-rul first.")
         return {}
 
-    means, stds = _mc_predict(model, x_test, _MC_SAMPLES)
+    rul_label_max = meta.get("rul_label_max", 1.0)
+    raw_means, raw_stds = _mc_predict(model, x_test, _MC_SAMPLES)
+    means = raw_means * rul_label_max
+    stds = raw_stds * rul_label_max
 
     mae = float(np.abs(means - y_test).mean())
     rmse = float(np.sqrt(((means - y_test) ** 2).mean()))
@@ -100,13 +103,14 @@ def predict_rul_per_device(paths: ProjectPaths | None = None) -> list[RULPredict
     model, meta = _load_rul_model(paths)
     scaler = joblib.load(paths.battery_rul_outputs_dir / "rul_scaler.pkl")
     seq_len = meta["seq_len"]
+    rul_label_max = meta.get("rul_label_max", 1.0)
 
     df = load_power_dataset(paths)
     df = apply_log1p_skewed(df)
     df = derive_rul_labels(df)
 
     feature_cols = [c for c in BATTERY_RUL_FEATURES if c in df.columns]
-    ups_df = df[df["battery_voltage_v"] > 0].copy()
+    ups_df = df[df["device_category"] == "ups"].copy()
     ups_df[feature_cols] = scaler.transform(ups_df[feature_cols])
 
     predictions: list[RULPrediction] = []
@@ -116,8 +120,8 @@ def predict_rul_per_device(paths: ProjectPaths | None = None) -> list[RULPredict
             continue
         window = device_df[feature_cols].values[-seq_len:]
         mean_pred, std_pred = _mc_predict(model, window[np.newaxis], _MC_SAMPLES)
-        rul_days = float(np.clip(mean_pred[0], 0, None))
-        ci_half = float(2 * std_pred[0])
+        rul_days = float(np.clip(mean_pred[0] * rul_label_max, 0, None))
+        ci_half = float(2 * std_pred[0] * rul_label_max)
 
         pred = RULPrediction(
             device_id=device_id,

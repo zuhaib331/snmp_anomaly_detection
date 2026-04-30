@@ -450,6 +450,8 @@ def _build_power_row(
         # BATTERY_RUL_FEATURES extras
         "charge_rate": round(charge_rate, 4),
         "discharge_cycles_approx": round(discharge_cycles, 2),
+        # Device metadata — used by derive_rul_labels; not a model feature
+        "install_age_days": profile.install_age_days,
         # Label
         "anomaly": 0,
         "anomaly_type": "none",

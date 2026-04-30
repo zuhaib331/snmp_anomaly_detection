@@ -191,7 +191,7 @@ class PowerDeviceConfig:
 @dataclass(frozen=True)
 class PowerTrainingConfig:
     batch_size: int = 64
-    epochs: int = 30
+    epochs: int = 100
     learning_rate: float = 1e-3
     hidden_size: int = 64
     latent_size: int = 32

@@ -42,6 +42,12 @@ def train_battery_rul(
     x_val, y_val = sequences[train_end:val_end], labels[train_end:val_end]
     x_test, y_test = sequences[val_end:], labels[val_end:]
 
+    # Normalize labels to [0, 1] so MSE loss operates on a unit scale.
+    # Scale factor is saved to metadata so inference can denormalize outputs.
+    rul_label_max = float(labels.max())
+    y_train_norm = y_train / rul_label_max
+    y_val_norm = y_val / rul_label_max
+
     input_size = x_train.shape[2]
     model = BatteryRULModel(
         input_size=input_size,
@@ -53,7 +59,7 @@ def train_battery_rul(
     loss_fn = torch.nn.MSELoss()
 
     train_tensor_x = torch.tensor(x_train, dtype=torch.float32)
-    train_tensor_y = torch.tensor(y_train, dtype=torch.float32)
+    train_tensor_y = torch.tensor(y_train_norm, dtype=torch.float32)
     dataset = torch.utils.data.TensorDataset(train_tensor_x, train_tensor_y)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
 
@@ -73,11 +79,12 @@ def train_battery_rul(
         history.append(epoch_loss)
         print(f"[RUL] epoch {epoch+1}/{config.epochs} loss={epoch_loss:.4f}")
 
-    # Validation MAE
+    # Validation MAE — denormalize predictions back to days before reporting
     model.eval()
     with torch.no_grad():
-        val_preds = model(torch.tensor(x_val, dtype=torch.float32)).cpu().numpy()
-        val_mae = float(np.abs(val_preds - y_val).mean())
+        val_preds_norm = model(torch.tensor(x_val, dtype=torch.float32)).cpu().numpy()
+        val_preds_days = val_preds_norm * rul_label_max
+        val_mae = float(np.abs(val_preds_days - y_val).mean())
 
     model_path = paths.battery_rul_outputs_dir / "rul_model.pt"
     torch.save(model.state_dict(), model_path)
@@ -90,6 +97,7 @@ def train_battery_rul(
         "dropout": config.dropout,
         "seq_len": seq_len,
         "epochs": config.epochs,
+        "rul_label_max": rul_label_max,
         "val_mae_days": val_mae,
         "train_loss_history": history,
         "train_size": len(x_train),
