@@ -61,10 +61,10 @@ class DualModelResult:
     window_timestamps: list[str] = field(default_factory=list)
     baseline_timestep_errors: list[float] = field(default_factory=list)
     baseline_peak_timestep: str = ""
-    baseline_top_features: str = ""
+    baseline_top_features: list[str] = field(default_factory=list)
     phase_timestep_errors: list[float] = field(default_factory=list)
     phase_peak_timestep: str = ""
-    phase_top_features: str = ""
+    phase_top_features: list[str] = field(default_factory=list)
 
 
 def _require_torch() -> None:
@@ -144,7 +144,7 @@ def _score_window_detailed(
         "mean_error": float(errors_active.mean()),
         "timestep_errors": [round(float(e), 6) for e in timestep_errors],
         "peak_timestep_idx": peak_idx,
-        "top_features": ",".join(top_features),
+        "top_features": top_features,
     }
 
 
@@ -316,6 +316,26 @@ def _collapse_to_events(flagged: list[DualModelResult]) -> list[DualModelResult]
     return events
 
 
+def _triggered_by(r: DualModelResult) -> str:
+    if r.overload_rule_flag:
+        return "overload_rule"
+    if r.baseline_anomaly and r.phase_anomaly:
+        return "both_models"
+    if r.baseline_anomaly:
+        return "baseline_model"
+    if r.phase_anomaly:
+        return "phase_model"
+    return "unknown"
+
+
+def _severity(max_ratio: float) -> str:
+    if max_ratio >= 3.0:
+        return "critical"
+    if max_ratio >= 1.5:
+        return "high"
+    return "medium"
+
+
 def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, silent: bool = False) -> None:
     paths.ensure_power_directories()
     rows = [asdict(r) for r in results]
@@ -392,9 +412,35 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
     with open(paths.power_dual_outputs_dir / "detection_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
+    # --- Load RUL predictions for UPS join ---
+    rul_map: dict = {}
+    rul_path = paths.battery_rul_outputs_dir / "rul_predictions.json"
+    if rul_path.exists():
+        with open(rul_path) as f:
+            for p in json.load(f):
+                rul_map[p["device_id"]] = p
+
     # --- Flagged event detail JSON (one entry per real anomaly event, duplicates collapsed) ---
     detail_rows = []
     for event_number, r in enumerate(events, start=1):
+        duration_minutes = int(
+            (pd.Timestamp(r.window_end) - pd.Timestamp(r.window_start)).total_seconds() / 60
+        )
+        b_ratio = round(r.baseline_error / r.baseline_threshold, 2) if r.baseline_threshold else 0.0
+        p_ratio = round(r.phase_error / r.phase_threshold, 2) if r.phase_threshold else 0.0
+        ground_truth_type = r.anomaly_types[0] if r.anomaly_types else None
+
+        rul_entry = None
+        if r.device_category == "ups" and r.device_id in rul_map:
+            p = rul_map[r.device_id]
+            rul_entry = {
+                "predicted_days": p["predicted_rul_days"],
+                "confidence_interval_lo": p["confidence_interval_lo"],
+                "confidence_interval_hi": p["confidence_interval_hi"],
+                "advisory": p["replacement_advisory"],
+                "as_of": p["timestamp"],
+            }
+
         detail_rows.append({
             "event_number": event_number,
             "device_id": r.device_id,
@@ -402,30 +448,38 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
             "vendor": r.vendor,
             "window_start": r.window_start,
             "window_end": r.window_end,
-            "anomaly_types": r.anomaly_types,
+            "duration_minutes": duration_minutes,
+            "triggered": bool(r.final_flag),
+            "triggered_by": _triggered_by(r),
             "alert_policy": r.alert_policy,
+            "severity": _severity(max(b_ratio, p_ratio)),
+            "ground_truth_type": ground_truth_type,
+            "true_positive": bool(r.final_flag) and ground_truth_type is not None,
             "baseline": {
                 "error": r.baseline_error,
                 "threshold": r.baseline_threshold,
+                "error_ratio": b_ratio,
                 "flagged": bool(r.baseline_anomaly),
                 "peak_timestep": r.baseline_peak_timestep,
                 "top_features": r.baseline_top_features,
-                "sequence": [
-                    {"timestamp": ts, "error": err}
-                    for ts, err in zip(r.window_timestamps, r.baseline_timestep_errors)
+                "breach_timesteps": [
+                    ts for ts, err in zip(r.window_timestamps, r.baseline_timestep_errors)
+                    if err > r.baseline_threshold
                 ],
             },
             "phase": {
                 "error": r.phase_error,
                 "threshold": r.phase_threshold,
+                "error_ratio": p_ratio,
                 "flagged": bool(r.phase_anomaly),
                 "peak_timestep": r.phase_peak_timestep,
                 "top_features": r.phase_top_features,
-                "sequence": [
-                    {"timestamp": ts, "error": err}
-                    for ts, err in zip(r.window_timestamps, r.phase_timestep_errors)
+                "breach_timesteps": [
+                    ts for ts, err in zip(r.window_timestamps, r.phase_timestep_errors)
+                    if err > r.phase_threshold
                 ],
             },
+            "rul": rul_entry,
         })
     detail_path = paths.power_dual_outputs_dir / "anomaly_windows_detail.json"
     with open(detail_path, "w") as f:
@@ -448,12 +502,10 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
                 print(f"\n  [{r.device_id}] {r.window_start} → {r.window_end}  types={r.anomaly_types}")
                 if r.baseline_anomaly:
                     print(f"    baseline: error={r.baseline_error:.6f} > thresh={r.baseline_threshold:.6f}")
-                    print(f"             peak_at={r.baseline_peak_timestep}  top_features=[{r.baseline_top_features}]")
-                    print(f"             sequence_errors={r.baseline_timestep_errors}")
+                    print(f"             peak_at={r.baseline_peak_timestep}  top_features={r.baseline_top_features}")
                 if r.phase_anomaly:
                     print(f"    phase:    error={r.phase_error:.6f} > thresh={r.phase_threshold:.6f}")
-                    print(f"             peak_at={r.phase_peak_timestep}  top_features=[{r.phase_top_features}]")
-                    print(f"             sequence_errors={r.phase_timestep_errors}")
+                    print(f"             peak_at={r.phase_peak_timestep}  top_features={r.phase_top_features}")
 
 
 def main() -> None:
