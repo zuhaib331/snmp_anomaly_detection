@@ -7,8 +7,12 @@ import numpy as np
 
 from snmp_anomaly_detection.config import ProjectPaths, PowerTrainingConfig
 from snmp_anomaly_detection.models.battery_rul import BatteryRULModel, torch
-from snmp_anomaly_detection.evaluation.time_split import time_based_split
-from snmp_anomaly_detection.preprocessing.battery_features import run_battery_feature_engineering
+from snmp_anomaly_detection.preprocessing.power_features import load_power_dataset, apply_log1p_skewed
+from snmp_anomaly_detection.preprocessing.battery_features import (
+    derive_rul_labels,
+    scale_battery_features,
+    build_per_device_rul_split,
+)
 
 
 def _require_torch() -> None:
@@ -26,25 +30,24 @@ def train_battery_rul(
     paths = paths or ProjectPaths()
     paths.ensure_power_directories()
 
-    # Build sequences and labels
-    result = run_battery_feature_engineering(seq_len=seq_len, paths=paths)
-    sequences = result["sequences"]
-    labels = result["labels"]
+    # Per-device 70/15/15 split (F10) — each UPS device contributes windows to
+    # all three sets so test metrics reflect the full device population.
+    df = load_power_dataset(paths)
+    df = apply_log1p_skewed(df)
+    df = derive_rul_labels(df)
+    scaled_df, _ = scale_battery_features(df, paths)
 
-    if len(sequences) == 0:
+    split = build_per_device_rul_split(scaled_df, seq_len=seq_len)
+    x_train, y_train = split["x_train"], split["y_train"]
+    x_val,   y_val   = split["x_val"],   split["y_val"]
+    x_test,  y_test  = split["x_test"],  split["y_test"]
+
+    if len(x_train) == 0:
         raise RuntimeError("No RUL sequences generated. Run generate-power-data first.")
-
-    # Time-based split on flattened index (sequences are already ordered chronologically)
-    n = len(sequences)
-    train_end = int(n * 0.70)
-    val_end = int(n * 0.85)
-    x_train, y_train = sequences[:train_end], labels[:train_end]
-    x_val, y_val = sequences[train_end:val_end], labels[train_end:val_end]
-    x_test, y_test = sequences[val_end:], labels[val_end:]
 
     # Normalize labels to [0, 1] so MSE loss operates on a unit scale.
     # Scale factor is saved to metadata so inference can denormalize outputs.
-    rul_label_max = float(labels.max())
+    rul_label_max = float(np.concatenate([y_train, y_val, y_test]).max())
     y_train_norm = y_train / rul_label_max
     y_val_norm = y_val / rul_label_max
 

@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
-from snmp_anomaly_detection.config import BATTERY_RUL_FEATURES, ProjectPaths
+from snmp_anomaly_detection.config import BATTERY_RUL_FEATURES, BATTERY_RUL_CATEGORIES, ProjectPaths
 from snmp_anomaly_detection.preprocessing.power_features import (
     apply_log1p_skewed,
     load_power_dataset,
@@ -63,7 +63,7 @@ def build_rul_sequences(
     Uses only UPS devices (those with non-zero battery_ah proxy: battery_voltage_v > 0).
     """
     feature_cols = [c for c in BATTERY_RUL_FEATURES if c in df.columns]
-    ups_df = df[df["device_category"] == "ups"].copy()
+    ups_df = df[df["device_category"].isin(BATTERY_RUL_CATEGORIES)].copy()
 
     all_seqs, all_labels = [], []
     for device_id in ups_df["device_id"].unique():
@@ -77,6 +77,60 @@ def build_rul_sequences(
     seqs = np.array(all_seqs) if all_seqs else np.empty((0, seq_len, len(feature_cols)))
     labels = np.array(all_labels, dtype=np.float32)
     return seqs, labels
+
+
+def build_per_device_rul_split(
+    df: pd.DataFrame,
+    seq_len: int = 24,
+    train_frac: float = 0.70,
+    val_frac: float = 0.15,
+) -> dict:
+    """Per-device 70/15/15 temporal split — every UPS contributes to all three sets.
+
+    The global last-15% split dumps one device's entire sequence into the test
+    set, producing misleading metrics. Splitting per device first then
+    concatenating ensures the test set spans all devices (F10).
+    """
+    feature_cols = [c for c in BATTERY_RUL_FEATURES if c in df.columns]
+    ups_df = df[df["device_category"].isin(BATTERY_RUL_CATEGORIES)].copy()
+
+    train_seqs, val_seqs, test_seqs = [], [], []
+    train_lbls, val_lbls, test_lbls = [], [], []
+
+    for device_id in ups_df["device_id"].unique():
+        device_df = ups_df[ups_df["device_id"] == device_id]
+        values = device_df[feature_cols].values
+        rul_vals = device_df["rul_days"].values
+
+        seqs, lbls = [], []
+        for i in range(len(values) - seq_len):
+            seqs.append(values[i : i + seq_len])
+            lbls.append(rul_vals[i + seq_len - 1])
+
+        if not seqs:
+            continue
+
+        seqs_arr = np.array(seqs)
+        lbls_arr = np.array(lbls, dtype=np.float32)
+        n = len(seqs_arr)
+        t_end = int(n * train_frac)
+        v_end = int(n * (train_frac + val_frac))
+
+        train_seqs.append(seqs_arr[:t_end])
+        val_seqs.append(seqs_arr[t_end:v_end])
+        test_seqs.append(seqs_arr[v_end:])
+        train_lbls.append(lbls_arr[:t_end])
+        val_lbls.append(lbls_arr[t_end:v_end])
+        test_lbls.append(lbls_arr[v_end:])
+
+    return {
+        "x_train": np.concatenate(train_seqs),
+        "y_train": np.concatenate(train_lbls),
+        "x_val":   np.concatenate(val_seqs),
+        "y_val":   np.concatenate(val_lbls),
+        "x_test":  np.concatenate(test_seqs),
+        "y_test":  np.concatenate(test_lbls),
+    }
 
 
 def scale_battery_features(

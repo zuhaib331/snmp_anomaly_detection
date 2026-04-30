@@ -7,7 +7,7 @@ from dataclasses import asdict
 import joblib
 import numpy as np
 
-from snmp_anomaly_detection.config import BATTERY_RUL_FEATURES, ProjectPaths
+from snmp_anomaly_detection.config import BATTERY_RUL_FEATURES, BATTERY_RUL_CATEGORIES, ProjectPaths, PowerTrainingConfig
 from snmp_anomaly_detection.models.battery_rul import BatteryRULModel, RULPrediction, torch
 from snmp_anomaly_detection.preprocessing.power_features import (
     apply_log1p_skewed,
@@ -16,7 +16,7 @@ from snmp_anomaly_detection.preprocessing.power_features import (
 from snmp_anomaly_detection.preprocessing.battery_features import derive_rul_labels
 
 
-_MC_SAMPLES: int = 30   # forward passes for MC Dropout confidence intervals
+_MC_SAMPLES: int = PowerTrainingConfig().mc_samples
 
 
 def _require_torch() -> None:
@@ -110,7 +110,7 @@ def predict_rul_per_device(paths: ProjectPaths | None = None) -> list[RULPredict
     df = derive_rul_labels(df)
 
     feature_cols = [c for c in BATTERY_RUL_FEATURES if c in df.columns]
-    ups_df = df[df["device_category"] == "ups"].copy()
+    ups_df = df[df["device_category"].isin(BATTERY_RUL_CATEGORIES)].copy()
     ups_df[feature_cols] = scaler.transform(ups_df[feature_cols])
 
     predictions: list[RULPrediction] = []

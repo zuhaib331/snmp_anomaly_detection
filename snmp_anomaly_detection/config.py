@@ -59,6 +59,16 @@ BATTERY_RUL_FEATURES: tuple[str, ...] = (
     "discharge_cycles_approx",
 )
 
+# ---------------------------------------------------------------------------
+# Model capability registry — single source of truth for which device
+# categories each model applies to.  To enable a model for a new device type,
+# add the category string here only — no inference or preprocessing code changes.
+# Long-term these will become capability flags on PowerDeviceProfile (see A1).
+# ---------------------------------------------------------------------------
+BASELINE_MODEL_CATEGORIES: frozenset[str] = frozenset({"ups", "pdu", "network", "env"})
+PHASE_MODEL_CATEGORIES: frozenset[str] = frozenset({"ups"})
+BATTERY_RUL_CATEGORIES: frozenset[str] = frozenset({"ups"})
+
 
 @dataclass(frozen=True)
 class ProjectPaths:
@@ -197,7 +207,8 @@ class PowerTrainingConfig:
     latent_size: int = 32
     threshold_std_multiplier: float = 2.0  # lowered from 3.0: better recall on soft anomalies
     seq_len: int = 20                       # 20 × 5-min steps = 100-min context window
-    dropout: float = 0.1              # used for MC Dropout in RUL confidence intervals
+    dropout: float = 0.3              # MC Dropout for RUL CIs — must be ≥ 0.2 for meaningful variance
+    mc_samples: int = 50              # forward passes per MC Dropout prediction
 
 
 @dataclass(frozen=True)

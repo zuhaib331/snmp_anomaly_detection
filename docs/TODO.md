@@ -1,7 +1,8 @@
 # SNMP Anomaly Detection — Task Backlog
 
 <!-- Managed list — update Status field as work progresses. -->
-<!-- Priority order: F1 → F2 → F3 → F4 → F5/F6/F7 → B1 → B2 → B3 → E1 → C1 → D1/D2/D3/D4 -->
+<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F5/F6 → E1 → C1 → D1/D2/D3/D4 -->
+<!-- Done: F1, F2, F3, F4, F7, F8, B1 -->
 
 <!-- ================================================================ -->
 <!-- F-series: Code review bug fixes (must resolve before feature work) -->
@@ -61,7 +62,7 @@ Add `df = add_delta_features(df)` after `apply_log1p_skewed` in `run_power_featu
 ---
 
 ## F4 — Fix `derive_rul_labels` ignoring device install age
-**Status:** Done — 2026-04-30  
+**Status:** Done — 2026-04-30 (code fix applied; **RUL model must be retrained** — run `python3 -m snmp_anomaly_detection train-battery-rul` to apply the label fix)  
 **Priority:** High — RUL labels for new and end-of-life batteries are identical at dataset start  
 **File:** [battery_features.py:52](../snmp_anomaly_detection/preprocessing/battery_features.py#L52)
 
@@ -77,6 +78,162 @@ Persist `install_age_days` from `PowerDeviceProfile` as a column in the syntheti
 ```python
 install_age = group["install_age_days"].iloc[0] if "install_age_days" in group.columns else 0.0
 age_days = install_age + i * _INTERVAL_MINUTES / 1440
+```
+
+---
+
+## F8 — Fix Battery RUL confidence intervals (MC Dropout CI coverage is 0%)
+**Status:** Done — 2026-04-30 (dropout 0.1→0.3, mc_samples 30→50, retrained after F4 label fix; see F10 for remaining test-split issue)  
+**Priority:** High — `rul_metrics.json` shows `ci_coverage_95pct: 0.0`; all 4 inference predictions cluster at ~173–175 days regardless of device state  
+**File:** [train_battery_rul.py](../snmp_anomaly_detection/training/train_battery_rul.py), [rul_eval.py](../snmp_anomaly_detection/evaluation/rul_eval.py)
+
+### Issue
+
+Two separate problems compound each other:
+
+**1. `dropout=0.1` is too small for MC Dropout to produce meaningful uncertainty.**  
+MC Dropout requires a dropout rate of at least 0.2–0.3 to generate variance across forward passes. At 0.1, all samples from the same input collapse to nearly the same value — the resulting CI is ≈ ±0 wide relative to the true label spread (0–1459 days). This explains CI coverage of 0.0%.
+
+**2. RUL model must be retrained after F4 before evaluating these metrics.**  
+F4 fixed the RUL label generation (install age offset). The current `rul_metrics.json` and `rul_predictions.json` are from the pre-F4 model where all devices started aging from day 0, producing identical-looking labels that caused the model to learn the dataset mean (~173 days) rather than device-specific health trajectories.
+
+### Fix
+
+**Step 1 — Retrain (prerequisite):**
+```bash
+python3 -m snmp_anomaly_detection generate-power-data
+python3 -m snmp_anomaly_detection train-battery-rul
+```
+Evaluate metrics. If `mae_days` drops below ~100 after retraining, F4 was the root cause and CI coverage may improve too.
+
+**Step 2 — Raise dropout if CI coverage is still < 0.50 after retraining:**
+In [config.py](../snmp_anomaly_detection/config.py), update `BatteryRULConfig`:
+```python
+dropout: float = 0.3   # was 0.1; MC Dropout requires ≥ 0.2 to produce useful variance
+mc_samples: int = 50   # increase from default if fewer
+```
+
+**Step 3 — Verify inference sets `model.train()` for MC sampling:**
+In `rul_eval.py`, confirm that the MC Dropout loop calls `model.train()` before sampling, not `model.eval()`. Calling `model.eval()` disables dropout, making all samples identical.
+```python
+model.train()   # must be train() not eval() for MC Dropout
+with torch.no_grad():
+    samples = torch.stack([model(x_tensor) for _ in range(mc_samples)])
+```
+
+### Validation
+After retraining and fix:
+- `mae_days` should be < 50 days  
+- `ci_coverage_95pct` should be > 0.80  
+- Predictions for a near-end-of-life device (install age > 1000 days) should be < 100 days; for a fresh device (install age < 30 days) should be > 1000 days
+
+---
+
+## F10 — Fix RUL test split: per-device temporal holdout instead of global last-15%
+**Status:** Done — 2026-04-30  
+**Priority:** Medium — global split dumps all sequences from one device into test set, producing misleading metrics; per-device predictions are already accurate (4/5 devices within 15 days)  
+**File:** [train_battery_rul.py](../snmp_anomaly_detection/training/train_battery_rul.py)
+
+### Issue
+
+`build_rul_sequences` concatenates sequences from all UPS devices in `unique()` order. The global 70/15/15 split then puts the **last device's entire sequence** into the test set. After retraining (F8 + F4):
+
+- Test set true RUL range: **1318–1323 days** (all from `ups_lie_03`, 5-day spread)
+- Model predictions for that slice: **1152–1489 days** (model cannot distinguish a 500-day-old Liebert from a 365-day-old one in a 2-hour window)
+- Result: test MAE = 144 days, CI coverage = 0.7% — both are artifacts of the split, not real model quality
+
+Per-device predictions show the model is actually working: 4 of 5 devices are predicted within 15 days of ground truth. `ups_lie_03` is the outlier (off by ~155 days) because it looks nearly identical to fresher Liebert devices at the 5-min SNMP polling scale.
+
+### Fix
+
+In `train_battery_rul.py`, split **per device** before concatenating:
+
+```python
+train_seqs, val_seqs, test_seqs = [], [], []
+train_lbls, val_lbls, test_lbls = [], [], []
+
+for device_id in ups_df["device_id"].unique():
+    dev = ups_df[ups_df["device_id"] == device_id]
+    seqs, lbls = _build_device_sequences(dev, feature_cols, seq_len)
+    n = len(seqs)
+    t_end = int(n * 0.70)
+    v_end = int(n * 0.85)
+    train_seqs.append(seqs[:t_end]);  train_lbls.append(lbls[:t_end])
+    val_seqs.append(seqs[t_end:v_end]); val_lbls.append(lbls[t_end:v_end])
+    test_seqs.append(seqs[v_end:]);  test_lbls.append(lbls[v_end:])
+
+x_train = np.concatenate(train_seqs); y_train = np.concatenate(train_lbls)
+x_val   = np.concatenate(val_seqs);   y_val   = np.concatenate(val_lbls)
+x_test  = np.concatenate(test_seqs);  y_test  = np.concatenate(test_lbls)
+```
+
+After this change the test set spans all 5 UPS devices' final windows (RUL from ~189 days to ~1454 days), giving a representative evaluation.
+
+### Expected improvement
+- Test MAE: 144 days → target < 50 days
+- CI coverage: 0.7% → target > 0.80
+
+---
+
+## F9 — Capability registry for model routing (phase model + RUL gating)
+**Status:** Done — 2026-04-30  
+**Priority:** High — phase model runs on all 16 devices but produces `flagged_phase: 0` for every PDU/network/env window; wastes inference time and pollutes OR policy with dead signal. Hardcoding `if category == "ups"` in inference code does not scale when new device types are onboarded.  
+**Files:** [config.py](../snmp_anomaly_detection/config.py), [dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py), [battery_features.py](../snmp_anomaly_detection/preprocessing/battery_features.py), [rul_eval.py](../snmp_anomaly_detection/evaluation/rul_eval.py)
+
+### Issue
+
+The phase model's `PHASE_LEVEL_FEATURES` include three-phase voltage columns (`input_voltage_l1/l2/l3`, `voltage_imbalance_pct`, `current_skew_pct`) that PDU/network/env devices do not have. The scorer currently runs the phase model on all device categories and fills missing features with 0. This produces reconstruction errors that are meaningless, yet consistently stays below the UPS-calibrated threshold — resulting in `flagged_phase: 0` for all non-UPS windows while still burning compute.
+
+Confirmed from `detection_summary.json`: all 4 PDU, 3 network, and 1 env device show `flagged_phase: 0` across 100% of their windows.
+
+**Why a hardcoded `if device_category == "ups":` is not enough:**
+The same category-to-model coupling exists in three places today (`dual_model_scorer.py`, `battery_features.py`, `rul_eval.py`). Hardcoding the string in each file means every new device type (e.g. a 3-phase PDU or a generator) requires hunting down and updating multiple files. This will be missed.
+
+### Fix
+
+**Step 1 — Add a capability registry to `config.py` (single source of truth)**
+
+```python
+# Which device categories are eligible for each model.
+# To onboard a new category: add it here only — no inference code changes needed.
+PHASE_MODEL_CATEGORIES: frozenset[str] = frozenset({"ups"})
+BATTERY_RUL_CATEGORIES: frozenset[str] = frozenset({"ups"})
+BASELINE_MODEL_CATEGORIES: frozenset[str] = frozenset({"ups", "pdu", "network", "env"})
+```
+
+**Step 2 — Update `dual_model_scorer.py` to read from config**
+
+```python
+from snmp_anomaly_detection.config import PHASE_MODEL_CATEGORIES
+
+if device_category in PHASE_MODEL_CATEGORIES:
+    phase_error = _score_phase_window(window_features, phase_model, phase_scaler)
+    phase_anomaly = int(phase_error > phase_threshold)
+else:
+    phase_error = 0.0
+    phase_anomaly = 0
+```
+
+Set `phase_top_features` to `[]` and `phase_timestep_errors` to `[]` for non-phase-capable rows in the output CSV.
+
+**Step 3 — Update `battery_features.py` and `rul_eval.py` to read from config**
+
+Replace all `df["device_category"] == "ups"` filters with:
+```python
+from snmp_anomaly_detection.config import BATTERY_RUL_CATEGORIES
+ups_df = df[df["device_category"].isin(BATTERY_RUL_CATEGORIES)].copy()
+```
+
+**Future path (ties into A1):** When device onboarding is built, replace these frozensets with capability flags on `PowerDeviceProfile` (`has_three_phase: bool`, `has_battery: bool`). The registry is the right abstraction for now; flags are the right long-term answer once A1 infrastructure exists.
+
+### Validation
+```bash
+python3 -m snmp_anomaly_detection detect-power-csv
+# Confirm: non-UPS rows have phase_error=0.0, phase_anomaly=0
+# Confirm: UPS rows still have non-zero phase scores
+# Confirm: inference wall-clock time drops (one forward pass instead of two for non-UPS)
+# Confirm: adding "pdu" to PHASE_MODEL_CATEGORIES in config.py alone is sufficient
+#          to enable phase scoring for PDUs — no inference file changes required
 ```
 
 ---
@@ -174,39 +331,314 @@ python3 -m snmp_anomaly_detection produce-power-kafka-test \
 
 ---
 
-## B2 — Expand training profiles and retrain
+## B2 — Make the model vendor-agnostic: replace absolute features with normalized features
 **Status:** Pending  
-**Priority:** Medium — improves cold-start quality for new/unseen devices  
-**Depends on:** B1 must be completed first
+**Priority:** High — current `detection_summary.json` shows 3 devices with 100% false-positive rates and 8117+ total FP windows; root cause is a structural design flaw, not missing vendor profiles  
+**Depends on:** B1 (done)  
+**MIB analysis confirmed (2026-04-30):** All three normalization values (`rated_capacity_w`, `nominal_voltage_v`, `rated_battery_v`) are auto-discoverable via SNMP for APC and Liebert GP devices. For RFC 1628-only devices, `rated_battery_v` has no OID and requires manual entry at onboarding. See A1 for the full OID resolution and unit conversion layer.
 
-### Why
-B1 fixes FPs for calibrated devices. But during the cold-start calibration window, a brand-new device (never seen in training) falls back to the per-category threshold. If that threshold is poorly calibrated for the device's actual capacity/phase/vendor, it can cause FPs during the first ~50 windows. B2 makes the per-category fallback threshold more robust.
+### Root cause (why adding more vendor profiles is the wrong fix)
 
-### What to build
-Expand `_DEFAULT_POWER_PROFILES` in [dataset_builder.py](../snmp_anomaly_detection/data/dataset_builder.py) to cover configurations not currently in training:
+The model inputs (`BASELINE_UPS_FEATURES`) do not include `vendor` or `device_id` — but they do include features whose **absolute values are determined by device physics**, which in turn depends on vendor-chosen capacity and voltage level:
 
-| Missing profile | Why it matters |
+| Feature in model | Why it is device-specific |
 |---|---|
-| `generic` UPS, single-phase, 120V, 3000/6000/10000 W | Largest FP source in random fleet tests |
-| Single-phase Liebert UPS | All training Liebert are 3-phase — causes phase model FPs |
-| 3-phase APC PDU | All training APC PDU are single-phase |
-| Higher-wattage APC UPS at 120V (6000/9000 W) | `output_current_a` goes OOD for scaler |
+| `output_power_w` | APC 3kW UPS: 0–3000 W. Liebert 10kW UPS: 0–10000 W. Completely different ranges. |
+| `output_current_a` | Derived from power ÷ voltage. Varies by both capacity and voltage standard (120V vs 230V). |
+| `input_voltage_v` | 120 V for APC, 230 V for Liebert/Raritan — hardcoded in `dataset_builder.py:223`. |
+| `output_voltage_v` | Same as above. |
+| `battery_voltage_v` | Varies by battery string design: 12V, 48V, 240V depending on UPS model. |
+| `battery_current_a` | Derived from battery voltage and capacity — device-specific. |
 
-### Retraining pipeline
+The `RobustScaler` is fitted on these absolute values from the training devices (APC 3kW at 120V and Liebert 10kW at 230V). When a new device with different capacity or voltage appears, its feature values land outside the scaler's learned range — reconstruction error is permanently above threshold even on perfectly normal windows. **This is why adding "more vendor profiles" is not the fix**: every new vendor would require retraining, and in production you cannot know vendor ahead of time.
+
+The real fix is to **replace absolute-value features with ratio/deviation features that mean the same thing regardless of device size or voltage level**. Once features are normalized, a 120V APC 3kW and a 230V Eaton 10kW look the same to the model when both are healthy. The model becomes category-scoped (UPS vs PDU), not vendor-scoped.
+
+### Step 1 — Add device registration fields to the CSV (dataset_builder.py)
+
+Two values drive all normalization. They must be written to every CSV row so `power_features.py` can use them at preprocessing time. In [dataset_builder.py:415](../snmp_anomaly_detection/data/dataset_builder.py#L415), add to the `row` dict:
+
+```python
+"rated_capacity_w":   profile.rated_capacity_w,
+"nominal_voltage_v":  230.0 if profile.vendor in ("liebert", "raritan") else 120.0,
+"rated_battery_v":    profile.battery_ah * 12.0 if profile.battery_ah > 0 else 0.0,
+```
+
+In production these values come from MIB discovery or device registration in the entity management tool — they are entered once when the device is onboarded, not inferred from vendor.
+
+### Step 2 — New function in power_features.py: `normalize_absolute_features()`
+
+Add this function to [power_features.py](../snmp_anomaly_detection/preprocessing/power_features.py), called **before** `apply_log1p_skewed`:
+
+```python
+def normalize_absolute_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace device-specific absolute values with device-agnostic ratios/deviations.
+
+    All outputs are dimensionless and have the same meaning across vendors,
+    voltage standards (120V / 230V), and capacity classes (1kW – 20kW).
+    """
+    df = df.copy()
+    cap  = df["rated_capacity_w"].clip(lower=1.0)
+    nomv = df["nominal_voltage_v"].clip(lower=1.0)
+
+    # output_power_w → already captured by output_load_pct (0-100%); drop it
+    df.drop(columns=["output_power_w"], errors="ignore", inplace=True)
+
+    # output_current_a → ratio relative to rated current at nominal voltage
+    rated_current = cap / nomv
+    df["output_current_ratio"] = df["output_current_a"] / rated_current.clip(lower=0.01)
+
+    # input_voltage_v, output_voltage_v → deviation from nominal in %
+    df["input_voltage_dev_pct"]  = (df["input_voltage_v"]  - nomv) / nomv * 100.0
+    df["output_voltage_dev_pct"] = (df["output_voltage_v"] - nomv) / nomv * 100.0
+
+    # battery_voltage_v → ratio to rated battery string voltage (0 for non-UPS)
+    rated_bv = df["rated_battery_v"].clip(lower=1.0)
+    df["battery_voltage_ratio"] = df["battery_voltage_v"] / rated_bv
+    df.loc[df["rated_battery_v"] == 0, "battery_voltage_ratio"] = 0.0
+
+    # battery_current_a → ratio to rated discharge current (capacity / voltage / 10h rate)
+    rated_bc = cap / rated_bv.clip(lower=1.0) / 10.0
+    df["battery_current_ratio"] = df["battery_current_a"] / rated_bc.clip(lower=0.01)
+    df.loc[df["rated_battery_v"] == 0, "battery_current_ratio"] = 0.0
+
+    return df
+```
+
+Drop the registration columns before passing to the scaler — they are not model inputs:
+```python
+df.drop(columns=["rated_capacity_w", "nominal_voltage_v", "rated_battery_v"],
+        errors="ignore", inplace=True)
+```
+
+### Step 3 — Update BASELINE_UPS_FEATURES in config.py
+
+Replace the six absolute-value features with their normalized equivalents:
+
+```python
+BASELINE_UPS_FEATURES: tuple[str, ...] = (
+    "battery_charge_pct",         # unchanged — already 0-100%
+    "battery_voltage_ratio",      # replaces battery_voltage_v
+    "battery_current_ratio",      # replaces battery_current_a
+    "battery_temperature_c",      # unchanged — universal scale (°C)
+    "runtime_remaining_min",      # unchanged — log1p applied; anomaly signal is the drop
+    "on_battery_status",          # unchanged — binary
+    "battery_replace_status",     # unchanged — binary
+    "input_voltage_dev_pct",      # replaces input_voltage_v
+    "input_frequency_hz",         # unchanged — 50/60 Hz, universal
+    "output_voltage_dev_pct",     # replaces output_voltage_v
+    "output_current_ratio",       # replaces output_current_a
+    "output_load_pct",            # unchanged — already 0-100%
+    "output_frequency_hz",        # unchanged — 50/60 Hz, universal
+    # output_power_w is DROPPED — redundant with output_load_pct
+    "runtime_delta",
+    "battery_charge_delta",
+    "temperature_delta",
+    "output_load_delta",
+)
+```
+
+`PHASE_LEVEL_FEATURES` keeps all phase columns unchanged — they are already expressed as voltages/currents whose anomaly signal is imbalance between phases (relative), and their deviation features derive from `input_voltage_dev_pct` computed above.
+
+### Step 4 — Replace vendor-specific profiles with a capacity/voltage parameter sweep
+
+The training dataset no longer needs vendor-named profiles. Replace `_DEFAULT_POWER_PROFILES` with a sweep across the parameter space that matters:
+
+| Parameter | Values to cover |
+|---|---|
+| UPS capacity | 1 kW, 2 kW, 3 kW, 5 kW, 7.5 kW, 10 kW, 15 kW |
+| Voltage standard | 120 V, 230 V |
+| Phase count | 1-phase, 3-phase |
+| Battery age | young (≤180 days), middle (180–720 days), aged (≥720 days) |
+| PDU capacity | 1.4 kW, 3.6 kW, 7.2 kW, 14.4 kW |
+
+This produces ~30–40 synthetic devices that cover the full production range without any vendor dependency. New vendors added to the entity management system will fall within this parameter space automatically.
+
+Remove the vendor string from `PowerDeviceProfile` or keep it for logging only — it must not drive any data generation logic. The only inputs that should matter for normalization are `rated_capacity_w`, `nominal_voltage_v`, `phase_count`, and `battery_ah`.
+
+### Step 5 — Update `_generate_normal_row` to use nominal_voltage_v, not vendor check
+
+In [dataset_builder.py:223](../snmp_anomaly_detection/data/dataset_builder.py#L223), replace:
+```python
+# Before
+nominal_v = 230.0 if profile.vendor in ("liebert", "raritan") else 120.0
+```
+with a field on `PowerDeviceProfile`:
+```python
+# After — nominal_voltage_v is an explicit field, not inferred from vendor
+nominal_v = profile.nominal_voltage_v
+```
+
+Add `nominal_voltage_v: float = 120.0` to `PowerDeviceProfile`. Each profile in the sweep sets this explicitly.
+
+### Retraining pipeline (run in order after all code changes)
+
 ```bash
 python3 -m snmp_anomaly_detection generate-power-data
 python3 -m snmp_anomaly_detection preprocess-power
 python3 -m snmp_anomaly_detection train-power-baseline
 python3 -m snmp_anomaly_detection train-power-phase
-python3 -m snmp_anomaly_detection evaluate-power-baseline
+python3 -m snmp_anomaly_detection train-battery-rul
+python3 -m snmp_anomaly_detection detect-power-csv
 ```
 
 ### Validation
+
 ```bash
-# Random fleet smoke test with no --use-training-profiles flag
-# Per-category cold-start threshold should now be clean for diverse devices
-python3 -m snmp_anomaly_detection produce-power-kafka-test \
-  --anomaly-probability 0.0 --seed 42
+# 1. Check normalized feature ranges — all should be in [-3, 3] for normal windows
+python3 - <<'EOF'
+import pandas as pd, numpy as np
+df = pd.read_csv("snmp_anomaly_detection/data/synthetic_power_snmp_dataset.csv")
+norm_cols = ["output_current_ratio","input_voltage_dev_pct","output_voltage_dev_pct",
+             "battery_voltage_ratio","battery_current_ratio"]
+print(df[df["anomaly"]==0][norm_cols].describe().round(3))
+EOF
+
+# 2. After detect-power-csv, precision should be >90% and FP rate <5% on normal windows
+python3 - <<'EOF'
+import pandas as pd
+df = pd.read_csv("snmp_anomaly_detection/outputs/power_dual/anomaly_results.csv")
+normal = df[df["true_label"]==0]
+print("FP rate on normal windows:", normal["final_flag"].mean().round(3))
+EOF
+```
+
+This also unblocks the `threshold_std_multiplier` recall improvement (currently 42.7% recall, `PowerTrainingConfig.threshold_std_multiplier=3.0`): lowering to 2.0 is the right call, but only evaluate it **after** FP rate is confirmed < 5% on normal windows from the new normalized model.
+
+---
+
+## A1 — SNMP OID Adapter Layer: vendor-agnostic OID resolution and unit normalization
+**Status:** Pending  
+**Priority:** High — without this layer, feature engineering (B2) cannot run against real devices; unit conversion bugs (RFC1628 ÷10 scaling, APC TimeTicks) will silently corrupt all features  
+**Depends on:** B2 (feature schema must be finalised before OID mappings can be written)
+
+### Why this task exists
+
+The MIB analysis (2026-04-30) confirmed that the same physical measurement is exposed under **different OID paths and in different units** depending on the vendor and MIB in use. Without an explicit resolution and conversion layer, the pipeline will silently ingest wrong values. Examples:
+
+| Measurement | RFC 1628 unit | APC unit | Liebert unit | Action needed |
+|---|---|---|---|---|
+| `battery_voltage_v` | **0.1 V** | Volts | Volts | RFC1628 path → ÷ 10 |
+| `battery_current_a` | **0.1 A** | Amps | Amps | RFC1628 path → ÷ 10 |
+| `input_frequency_hz` | **0.1 Hz** | Hz | Hz | RFC1628 path → ÷ 10 |
+| `output_frequency_hz` | **0.1 Hz** | Hz | Hz | RFC1628 path → ÷ 10 |
+| `output_current_a` | **0.1 A** | Amps | Amps | RFC1628 path → ÷ 10 |
+| `runtime_remaining_min` | minutes | **TimeTicks (1/100 s)** | minutes | APC path → ÷ 6000 |
+| `rated_capacity_w` | Watts | **kVA** | Watts / VA | APC path → × 1000 (VA), then × 0.9 ≈ W |
+
+These are **silent corruptions** — SNMP returns a valid integer, but the magnitude is 10× wrong. There is no error to catch.
+
+### What to build
+
+**1. OID resolution config — `snmp_anomaly_detection/config/oid_map.yaml`**
+
+One YAML file per feature, ordered by polling priority (try standard RFC 1628 first; fall back to vendor-proprietary if the standard OID returns 0 or error). Format:
+
+```yaml
+features:
+  rated_capacity_w:
+    - oid: "1.3.6.1.2.1.33.1.9.6"       # RFC1628 upsConfigOutputPower
+      scale: 1.0
+      unit: watts
+    - oid: "1.3.6.1.4.1.318.1.1.1.4.2.6" # APC upsAdvOutputKVACapacity
+      scale: 1000.0                        # kVA → VA (use as W approximation)
+      unit: kva
+    - oid: "1.3.6.1.4.1.476.1.42.3.5.7.6" # Liebert GP lgpPwrTopMaximumFrameCapacity
+      scale: 1.0
+      unit: va
+    - oid: "1.3.6.1.4.1.476.1.1.1.1.1.9.4" # Liebert UPS lcUpsNominalOutputWatts
+      scale: 1.0
+      unit: watts
+
+  nominal_voltage_v:
+    - oid: "1.3.6.1.2.1.33.1.9.1"         # RFC1628 upsConfigInputVoltage
+      scale: 1.0
+    - oid: "1.3.6.1.4.1.318.1.1.1.3.2.7"  # APC upsAdvInputNominalVoltage
+      scale: 1.0
+    - oid: "1.3.6.1.4.1.476.1.1.1.1.1.9.2" # Liebert UPS lcUpsNominalInputVoltage
+      scale: 1.0
+    # Liebert GP: table walk required — handled in code, not YAML
+
+  rated_battery_v:
+    - oid: "1.3.6.1.4.1.318.1.1.1.2.2.7"   # APC upsAdvBatteryNominalVoltage ✓
+      scale: 1.0
+    - oid: "1.3.6.1.4.1.476.1.42.3.5.2.3.1.6.1" # Liebert GP lgpPwrDcMeasurementPointNomVolts ✓
+      scale: 1.0
+    # RFC1628 and Liebert legacy UPS MIB: no OID → fallback = manual_entry
+
+  battery_voltage_v:
+    - oid: "1.3.6.1.2.1.33.1.2.5"           # RFC1628 upsBatteryVoltage — 0.1 V units
+      scale: 0.1                              # ÷10 to get Volts
+    - oid: "1.3.6.1.4.1.318.1.1.1.2.2.8"    # APC upsAdvBatteryActualVoltage — whole Volts
+      scale: 1.0
+    - oid: "1.3.6.1.4.1.318.1.1.1.2.3.2"    # APC hi-res upsHighPrecBatteryActualVoltage — 0.1 V
+      scale: 0.1
+    - oid: "1.3.6.1.4.1.476.1.1.1.1.1.2.3"  # Liebert UPS lcUpsBatVoltage — whole Volts
+      scale: 1.0
+
+  runtime_remaining_min:
+    - oid: "1.3.6.1.2.1.33.1.2.3"            # RFC1628 — minutes
+      scale: 1.0
+    - oid: "1.3.6.1.4.1.318.1.1.1.2.2.3"     # APC — TimeTicks (1/100 s) → ÷6000
+      scale: 0.000166667
+    - oid: "1.3.6.1.4.1.476.1.1.1.1.1.2.1"   # Liebert UPS — minutes
+      scale: 1.0
+    - oid: "1.3.6.1.4.1.476.1.42.3.5.1.18"   # Liebert GP — minutes (65535 = unavailable)
+      scale: 1.0
+
+  # ... (full list for all 17 features follows the same pattern)
+```
+
+**2. `rated_battery_v` fallback strategy for RFC1628-only devices**
+
+When no OID returns a usable value and no manual entry is provided, set `rated_battery_v = 0` and disable `battery_voltage_ratio` and `battery_current_ratio` from the feature vector for that device. The model still runs on the remaining 15 features. Log a warning at onboarding time.
+
+```python
+if device.rated_battery_v == 0:
+    features["battery_voltage_ratio"] = 0.0
+    features["battery_current_ratio"] = 0.0
+    # these two columns are masked out; scaler was trained with 0.0 for non-UPS devices
+```
+
+**3. `on_battery_status` derivation (different polling pattern per vendor)**
+
+| MIB | Method |
+|---|---|
+| RFC1628 | Poll `upsOutputSource` (1.3.6.1.2.1.33.1.4.1); value `5` = on battery |
+| APC | Poll `upsBasicOutputStatus` (1.3.6.1.4.1.318.1.1.1.4.1.1); value `3` = on battery |
+| Liebert GP | Poll `lgpPwrOutputToLoadOnInverter` (1.3.6.1.4.1.476.1.42.3.5.3.7); value `1` = yes |
+| Liebert UPS | Walk `lcUpsAlarmTable`; check for `lcUpsAlarmOnBattery` descriptor |
+
+**4. `battery_replace_status` derivation**
+
+| MIB | Method |
+|---|---|
+| RFC1628 | Walk `upsAlarmTable` (1.3.6.1.2.1.33.1.6.2); flag set if `upsAlarmBatteryBad` OID present |
+| APC | Poll `upsAdvBatteryReplaceIndicator` (.2.2.4); value `2` = needs replacing ← preferred, direct scalar |
+| Liebert GP | Poll `lgpPwrBatteryCapacityStatus` (.1.26); value `3` (low) or `4` (depleted) = flag |
+| Liebert UPS | Walk alarm table; check for `lcUpsAlarmBatteryBad` |
+
+**5. Liebert GP two-step discovery**
+
+The GP Power MIB uses a generic measurement-point table. Before polling live values, walk `lgpPwrMeasurementPointTable` once at onboarding to discover point IDs (input row vs. output row), then use those IDs as the first index `M` when polling `lgpPwrLineMeasurementTable` for per-phase readings.
+
+### New features unlocked by the MIB analysis (add to BASELINE_UPS_FEATURES if universal coverage confirmed)
+
+| Feature | OID source | Coverage | Value for anomaly detection |
+|---|---|---|---|
+| `bypass_flag` | RFC1628 `upsOutputSource`==4; APC status==6/9/10; Liebert GP `lgpPwrOutputToLoadOnBypass` | All vendors | Already exists as a column in synthetic data — now wire to real OIDs |
+| `charger_fault_flag` | RFC1628 alarm `upsAlarmChargerFailed`; APC `upsAdvBatteryNumOfBadBattPacks`>0; Liebert GP `lgpPwrBatteryChargeStatus` fault enum | All vendors | Charger failure precedes battery drain by hours — strong early warning |
+| `transfer_count_delta` | Liebert GP `lgpPwrTransferCount`; RFC1628 `upsInputLineBads` (cumulative counter) | Liebert GP direct; others indirect | Rate of input-to-battery transfers is a power quality degradation signal |
+| `discharge_cycles` | Liebert GP `lgpPwrBatteryDischargeCount` | Liebert GP only | Cumulative discharge cycles — strongest available predictor for RUL model |
+
+`discharge_cycles` from Liebert GP should be added to `BATTERY_RUL_FEATURES` if Liebert is a primary vendor. `bypass_flag` and `charger_fault_flag` should be added to `BASELINE_UPS_FEATURES` as they are universally available.
+
+**THD (`lgpPwrLineMeasurementCurrentTHD`) is Liebert GP only — do not add to universal feature set. Mark as a Liebert-specific enrichment feature.**
+
+### File to create
+```
+snmp_anomaly_detection/config/oid_map.yaml   ← new file
+snmp_anomaly_detection/collection/oid_resolver.py  ← new file; loads YAML, tries OIDs in order, applies scale
 ```
 
 ---
@@ -214,7 +646,11 @@ python3 -m snmp_anomaly_detection produce-power-kafka-test \
 ## B3 — Phase sag recall and Liebert 3-phase accuracy
 **Status:** Pending  
 **Priority:** Medium — improves phase model recall for voltage fault types; fixes Liebert-specific FPs  
-**Depends on:** B2 (Liebert single-phase profiles must be in training data first)
+**Depends on:** B2 (Liebert single-phase profiles must be in training data first) and F9 (phase model must be gated to UPS-only first)
+
+### Current confirmed numbers (from `detection_summary.json`)
+- Phase sag detection rate: **~25%** (confirmed by evaluation)
+- Phase model fires on UPS devices only — all 4 PDU/network/env devices show `flagged_phase: 0` across every window, even though the scorer runs the phase model on them. This is expected once F9 is done (gating), but confirms the phase model provides zero value for non-UPS today.
 
 ### Issue 1 — Phase sag recall (voltage features under-weighted in global MSE)
 

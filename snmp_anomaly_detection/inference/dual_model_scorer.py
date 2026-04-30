@@ -19,6 +19,7 @@ import pandas as pd
 from snmp_anomaly_detection.config import (
     BASELINE_UPS_FEATURES,
     PHASE_LEVEL_FEATURES,
+    PHASE_MODEL_CATEGORIES,
     PowerInferenceConfig,
     ProjectPaths,
 )
@@ -229,12 +230,18 @@ def run_dual_detection(
 
             mse_excl = _NON_UPS_MSE_EXCLUDE if device_category != "ups" else frozenset()
             b_detail = _score_window_detailed(baseline_model, b_win, baseline_cols, baseline_normal_errors, baseline_normal_stds, mse_excl)
-            p_detail = _score_window_detailed(phase_model, p_win, phase_cols, phase_normal_errors, phase_normal_stds, mse_excl)
+
+            if device_category in PHASE_MODEL_CATEGORIES:
+                p_detail = _score_window_detailed(phase_model, p_win, phase_cols, phase_normal_errors, phase_normal_stds, mse_excl)
+                p_err = p_detail["mean_error"]
+                p_flag = int(p_err > p_threshold)
+            else:
+                p_detail = {"mean_error": 0.0, "peak_timestep_idx": 0, "top_features": [], "timestep_errors": []}
+                p_err = 0.0
+                p_flag = 0
 
             b_err = b_detail["mean_error"]
-            p_err = p_detail["mean_error"]
             b_flag = int(b_err > b_threshold)
-            p_flag = int(p_err > p_threshold)
 
             if policy == "or":
                 combined = int(b_flag or p_flag)
