@@ -25,10 +25,11 @@ from snmp_anomaly_detection.config import (
 )
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
 from snmp_anomaly_detection.preprocessing.power_features import (
+    load_power_dataset,
     aggregate_phase_metrics,
+    normalize_absolute_features,
     apply_log1p_skewed,
     add_delta_features,
-    load_power_dataset,
     create_sequences,
 )
 from snmp_anomaly_detection.preprocessing.phase_features import (
@@ -182,6 +183,7 @@ def run_dual_detection(
     # Load and preprocess dataset
     df = load_power_dataset(paths)
     df = aggregate_phase_metrics(df)
+    df = normalize_absolute_features(df)
     df = apply_log1p_skewed(df)
     df = add_delta_features(df)
     df = enrich_imbalance_features(df)

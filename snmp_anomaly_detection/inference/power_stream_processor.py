@@ -32,8 +32,8 @@ from snmp_anomaly_detection.preprocessing.phase_features import (
 )
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
 
-# Mirrors apply_log1p_skewed from power_features.py
-_LOG1P_COLS: tuple[str, ...] = ("runtime_remaining_min", "output_power_w")
+# Mirrors apply_log1p_skewed from power_features.py (output_power_w dropped by B2 normalization)
+_LOG1P_COLS: tuple[str, ...] = ("runtime_remaining_min",)
 
 # Mirrors add_delta_features: source columns → target delta column names.
 # runtime_remaining_min is tracked *after* log1p (same as training order).
@@ -79,6 +79,12 @@ class PowerEvent:
     vendor: str
     feature_values: dict[str, float]   # canonical feature name → value
     phase_count: int = 1               # 1 (single-phase) or 3 (three-phase)
+    # Device registration constants for B2 normalization.
+    # Set these from device registration / SNMP discovery at onboarding time.
+    # If rated_capacity_w == 0, normalization falls back to raw values (graceful degradation).
+    rated_capacity_w: float = 0.0      # nameplate power rating in Watts
+    nominal_voltage_v: float = 120.0   # nominal input voltage (120 or 230)
+    rated_battery_v: float = 0.0       # battery string voltage (0 for non-UPS)
     session_reset: bool = False        # clears stale per-device delta state on new producer run
     true_label: int = 0                # ground-truth flag from test producer (0 in production)
     anomaly_type: str = "none"         # ground-truth type from test producer ("none" in production)
@@ -335,8 +341,9 @@ class PowerStreamProcessor:
         """Mirror the training transforms applied before scaling.
 
         Replicates, in order:
-          1. apply_log1p_skewed  — log1p on runtime_remaining_min and output_power_w
-          2. add_delta_features  — signed_log1p of per-device diff for the 4 delta cols
+          1. normalize_absolute_features — replace absolute V/A/W with vendor-agnostic ratios
+          2. apply_log1p_skewed          — log1p on runtime_remaining_min
+          3. add_delta_features          — signed_log1p of per-device diff for the 4 delta cols
         """
         # A new producer session signals that _prev_raw carries state from a different
         # run. Clearing it prevents a large delta spike on the first scored window.
@@ -347,12 +354,33 @@ class PowerStreamProcessor:
 
         fv = event.feature_values
 
-        # Step 1: log1p on skewed cols (runtime is log1p'd before delta is computed, same as training)
+        # Step 1: B2 normalization — mirrors normalize_absolute_features() from power_features.py.
+        # Requires rated_capacity_w > 0 (set from device registration at onboarding).
+        # Gracefully skips normalization if registration data is absent (rated_capacity_w == 0).
+        cap = max(event.rated_capacity_w, 1.0)
+        nomv = max(event.nominal_voltage_v, 1.0)
+        rated_bv = event.rated_battery_v
+
+        if event.rated_capacity_w > 0:
+            rated_current = cap / nomv
+            fv["output_current_ratio"] = fv.get("output_current_a", 0.0) / max(rated_current, 0.01)
+            fv["input_voltage_dev_pct"] = (fv.get("input_voltage_v", nomv) - nomv) / nomv * 100.0
+            fv["output_voltage_dev_pct"] = (fv.get("output_voltage_v", nomv) - nomv) / nomv * 100.0
+
+            if rated_bv > 0:
+                fv["battery_voltage_ratio"] = fv.get("battery_voltage_v", 0.0) / max(rated_bv, 1.0)
+                rated_bc = cap / max(rated_bv, 1.0) / 10.0
+                fv["battery_current_ratio"] = fv.get("battery_current_a", 0.0) / max(rated_bc, 0.01)
+            else:
+                fv["battery_voltage_ratio"] = 0.0
+                fv["battery_current_ratio"] = 0.0
+
+        # Step 2: log1p on skewed cols (runtime is log1p'd before delta is computed, same as training)
         for col in _LOG1P_COLS:
             if col in fv:
                 fv[col] = float(np.log1p(max(fv[col], 0.0)))
 
-        # Step 2: per-device signed_log1p delta
+        # Step 3: per-device signed_log1p delta
         prev = self._prev_raw.get(event.device_id)
         for src, tgt in zip(_DELTA_SOURCES, _DELTA_TARGETS):
             cur = fv.get(src, 0.0)

@@ -16,7 +16,8 @@ from sklearn.preprocessing import RobustScaler
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, ProjectPaths
 
 
-LOG1P_COLS: tuple[str, ...] = ("runtime_remaining_min", "output_power_w")
+# output_power_w is dropped by normalize_absolute_features (redundant with output_load_pct)
+LOG1P_COLS: tuple[str, ...] = ("runtime_remaining_min",)
 
 
 def load_power_dataset(paths: ProjectPaths | None = None) -> pd.DataFrame:
@@ -53,6 +54,47 @@ def aggregate_phase_metrics(df: pd.DataFrame) -> pd.DataFrame:
     if all(c in df.columns for c in phase_cols):
         df = df.copy()
         df["input_voltage_v"] = df[phase_cols].mean(axis=1)
+    return df
+
+
+def normalize_absolute_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace device-specific absolute values with vendor-agnostic ratios/deviations.
+
+    Requires columns: rated_capacity_w, nominal_voltage_v, rated_battery_v (written
+    to the dataset CSV by dataset_builder.py; in production these come from device
+    registration).  The three registration columns are dropped after use.
+
+    Call this BEFORE apply_log1p_skewed so ratios are computed on raw values.
+    """
+    df = df.copy()
+
+    cap  = df["rated_capacity_w"].clip(lower=1.0)
+    nomv = df["nominal_voltage_v"].clip(lower=1.0)
+
+    # output_current_a → ratio to rated current at nominal voltage
+    rated_current = cap / nomv
+    df["output_current_ratio"] = df["output_current_a"] / rated_current.clip(lower=0.01)
+
+    # input_voltage_v, output_voltage_v → % deviation from nominal
+    df["input_voltage_dev_pct"]  = (df["input_voltage_v"]  - nomv) / nomv * 100.0
+    df["output_voltage_dev_pct"] = (df["output_voltage_v"] - nomv) / nomv * 100.0
+
+    # battery_voltage_v → ratio to rated battery string voltage (0 for non-UPS)
+    rated_bv = df["rated_battery_v"].clip(lower=1.0)
+    df["battery_voltage_ratio"] = df["battery_voltage_v"] / rated_bv
+    df.loc[df["rated_battery_v"] == 0, "battery_voltage_ratio"] = 0.0
+
+    # battery_current_a → ratio to rated 10-hour discharge current (C/10 rate)
+    rated_bc = cap / rated_bv.clip(lower=1.0) / 10.0
+    df["battery_current_ratio"] = df["battery_current_a"] / rated_bc.clip(lower=0.01)
+    df.loc[df["rated_battery_v"] == 0, "battery_current_ratio"] = 0.0
+
+    # Drop registration columns (not model inputs) and redundant absolute feature
+    df.drop(
+        columns=["rated_capacity_w", "nominal_voltage_v", "rated_battery_v", "output_power_w"],
+        errors="ignore",
+        inplace=True,
+    )
     return df
 
 
@@ -113,6 +155,7 @@ def run_power_feature_engineering(
 
     df = load_power_dataset(paths)
     df = aggregate_phase_metrics(df)
+    df = normalize_absolute_features(df)
     df = apply_log1p_skewed(df)
     df = add_delta_features(df)
     train_df = filter_normal_rows(df)

@@ -12,6 +12,7 @@ from snmp_anomaly_detection.preprocessing.power_features import (
     run_power_feature_engineering,
     load_power_dataset,
     aggregate_phase_metrics,
+    normalize_absolute_features,
     apply_log1p_skewed,
     add_delta_features,
     filter_normal_rows,
@@ -53,6 +54,7 @@ def train_baseline_power(
     # Build time-split sequences using normal-only training partition
     df = load_power_dataset(paths)
     df = aggregate_phase_metrics(df)
+    df = normalize_absolute_features(df)
     df = apply_log1p_skewed(df)
     df = add_delta_features(df)
     normal_df = filter_normal_rows(df)

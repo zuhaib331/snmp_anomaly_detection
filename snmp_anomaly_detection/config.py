@@ -13,24 +13,26 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 # Aggregated UPS health metrics (baseline model input) — canonical names from OID mapping doc
 BASELINE_UPS_FEATURES: tuple[str, ...] = (
     "battery_charge_pct",
-    "battery_voltage_v",
-    "battery_current_a",
+    "battery_voltage_ratio",      # battery_voltage_v / rated_battery_v — vendor-agnostic
+    "battery_current_ratio",      # battery_current_a / rated_discharge_current — vendor-agnostic
     "battery_temperature_c",
     "runtime_remaining_min",
     "on_battery_status",
     "battery_replace_status",
-    "input_voltage_v",
+    "input_voltage_dev_pct",      # (input_voltage_v - nominal_voltage_v) / nominal_voltage_v * 100
     "input_frequency_hz",
-    "output_voltage_v",
-    "output_current_a",
+    "output_voltage_dev_pct",     # (output_voltage_v - nominal_voltage_v) / nominal_voltage_v * 100
+    "output_current_ratio",       # output_current_a / (rated_capacity_w / nominal_voltage_v)
     "output_load_pct",
     "output_frequency_hz",
-    "output_power_w",
+    # output_power_w dropped — redundant with output_load_pct after normalization
     # Rate-of-change features — capture slow-changing signals within a window
+    # battery_charge_delta omitted: charge changes ~0.02%/step (noise after scaling),
+    # LSTM reconstructs it with MSE=2.37 on normal data → inflates UPS threshold to 43×
+    # battery_charge_pct sequence already gives the LSTM the trend signal implicitly.
     "runtime_delta",
-    "battery_charge_delta",
-    "temperature_delta",    # rising temp → thermal_runaway signal
-    "output_load_delta",    # load ramp-up → overload signal
+    "temperature_delta",
+    "output_load_delta",
 )
 
 # Per-phase raw metrics (phase-level model input) — superset of BASELINE_UPS_FEATURES

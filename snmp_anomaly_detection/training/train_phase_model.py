@@ -9,10 +9,12 @@ from snmp_anomaly_detection.config import PHASE_LEVEL_FEATURES, ProjectPaths, Po
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
 from snmp_anomaly_detection.evaluation.time_split import time_based_split
 from snmp_anomaly_detection.preprocessing.power_features import (
+    load_power_dataset,
+    aggregate_phase_metrics,
+    normalize_absolute_features,
     apply_log1p_skewed,
     add_delta_features,
     filter_normal_rows,
-    load_power_dataset,
 )
 from snmp_anomaly_detection.preprocessing.phase_features import (
     enrich_imbalance_features,
@@ -40,6 +42,8 @@ def train_phase_model(
     seq_len = seq_len if seq_len is not None else config.seq_len
 
     df = load_power_dataset(paths)
+    df = aggregate_phase_metrics(df)
+    df = normalize_absolute_features(df)
     df = apply_log1p_skewed(df)
     df = add_delta_features(df)
     df = enrich_imbalance_features(df)

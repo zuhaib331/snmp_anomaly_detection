@@ -332,9 +332,18 @@ python3 -m snmp_anomaly_detection produce-power-kafka-test \
 ---
 
 ## B2 — Make the model vendor-agnostic: replace absolute features with normalized features
-**Status:** Pending  
+**Status:** Done — 2026-05-04  
 **Priority:** High — current `detection_summary.json` shows 3 devices with 100% false-positive rates and 8117+ total FP windows; root cause is a structural design flaw, not missing vendor profiles  
-**Depends on:** B1 (done)  
+**Depends on:** B1 (done)
+
+**Results after implementation:**
+- Overall FP rate: 0.1% (target < 5%) ✅
+- 230V device FP rate: 0.0–0.2% (was 100% before B2) ✅
+- Recall: 88.3% (target > 60%) ✅
+- Baseline UPS threshold: 0.338 (was 43.366 before removing battery_charge_delta) ✅
+- RUL validation MAE: 8.83 days ✅
+
+**Key fix during testing:** `battery_charge_delta` was removed from `BASELINE_UPS_FEATURES` (and `PHASE_LEVEL_FEATURES` by extension). Charge changes ~0.02%/step are noise after RobustScaler; the LSTM reconstructed it with MSE=2.37 on normal data, inflating the UPS threshold to 43. `battery_charge_pct` sequence gives the LSTM the trend implicitly.  
 **MIB analysis confirmed (2026-04-30):** All three normalization values (`rated_capacity_w`, `nominal_voltage_v`, `rated_battery_v`) are auto-discoverable via SNMP for APC and Liebert GP devices. For RFC 1628-only devices, `rated_battery_v` has no OID and requires manual entry at onboarding. See A1 for the full OID resolution and unit conversion layer.
 
 ### Root cause (why adding more vendor profiles is the wrong fix)

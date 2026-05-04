@@ -121,10 +121,12 @@ class PowerDeviceProfile:
     """Physical characteristics of a power device used during synthetic generation."""
     device_id: str
     device_category: str           # ups | pdu | network | env
-    vendor: str                    # apc | liebert | raritan | cisco | generic
+    vendor: str                    # for logging only — does not drive data generation logic
     phase_count: int               # 1 or 3
     rated_capacity_w: float        # nameplate rating in Watts
+    nominal_voltage_v: float       # 120.0 (US/Japan) or 230.0 (Europe/Asia) — explicit, not inferred from vendor
     battery_ah: float              # Amp-hour capacity (UPS only; 0 for non-UPS)
+    rated_battery_v: float         # nominal battery string voltage (UPS only; 0 for non-UPS)
     battery_expected_life_years: float = 3.0
     install_age_days: float = 0.0  # simulated age at dataset start
 
@@ -137,30 +139,42 @@ class PowerDatasetConfig:
     anomaly_probability: float = 0.05
 
 
-# Pre-defined device profiles covering the four device categories
+# Parameter sweep across capacity × voltage × phase × battery-age space.
+# Vendor field is kept for logging/identification only — it does not drive any
+# data-generation logic.  All physics parameters are explicit on the profile.
+# rated_battery_v: 24V (≤3 kW), 48V (5 kW), 96V (7.5 kW), 120V (10 kW 3Φ), 192V (15 kW 3Φ)
 _DEFAULT_POWER_PROFILES: list[PowerDeviceProfile] = [
-    # APC single-phase UPS (young battery)
-    PowerDeviceProfile("ups_apc_01", "ups", "apc",     1, 3000.0,  7.2, 3.0,   90.0),
-    # APC single-phase UPS (aged battery — near end of life)
-    PowerDeviceProfile("ups_apc_02", "ups", "apc",     1, 3000.0,  7.2, 3.0, 900.0),
-    # Liebert three-phase UPS
-    PowerDeviceProfile("ups_lie_01", "ups", "liebert", 3, 10000.0, 40.0, 5.0, 365.0),
-    # Liebert three-phase UPS (moderate age)
-    PowerDeviceProfile("ups_lie_02", "ups", "liebert", 3, 10000.0, 40.0, 5.0, 700.0),
-    # APC PDU (single-phase)
-    PowerDeviceProfile("pdu_apc_01", "pdu", "apc",    1, 1440.0,  0.0, 0.0,   0.0),
-    # Raritan PDU (single-phase)
-    PowerDeviceProfile("pdu_rar_01", "pdu", "raritan",1, 7200.0,  0.0, 0.0,   0.0),
-    # Raritan 3-phase PDU — adds phase_sag training data
-    PowerDeviceProfile("pdu_rar_02", "pdu", "raritan",3, 14400.0, 0.0, 0.0,   0.0),
-    # Liebert three-phase UPS (new, moderate age) — additional phase_sag coverage
-    PowerDeviceProfile("ups_lie_03", "ups", "liebert", 3, 10000.0, 40.0, 5.0, 500.0),
-    # Cisco switch with dual PSU
-    PowerDeviceProfile("net_cis_01", "network", "cisco", 1, 200.0, 0.0, 0.0,  0.0),
-    # Generic router
-    PowerDeviceProfile("net_gen_01", "network", "generic", 1, 150.0, 0.0, 0.0, 0.0),
-    # Environmental sensor node
-    PowerDeviceProfile("env_gen_01", "env", "generic",   1,   5.0, 0.0, 0.0,  0.0),
+    # ── UPS: 1 kW / 120 V / single-phase ──────────────────────────────────
+    PowerDeviceProfile("ups_1kw_120v_a", "ups", "generic", 1, 1000.0, 120.0,  7.2, 24.0, 3.0,   90.0),
+    PowerDeviceProfile("ups_1kw_120v_b", "ups", "generic", 1, 1000.0, 120.0,  7.2, 24.0, 3.0,  720.0),
+    # ── UPS: 3 kW / 120 V / single-phase ──────────────────────────────────
+    PowerDeviceProfile("ups_3kw_120v_a", "ups", "apc",     1, 3000.0, 120.0,  7.2, 24.0, 3.0,   90.0),
+    PowerDeviceProfile("ups_3kw_120v_b", "ups", "apc",     1, 3000.0, 120.0,  7.2, 24.0, 3.0,  365.0),
+    PowerDeviceProfile("ups_3kw_120v_c", "ups", "apc",     1, 3000.0, 120.0,  7.2, 24.0, 3.0,  900.0),
+    # ── UPS: 5 kW / 120 V / single-phase ──────────────────────────────────
+    PowerDeviceProfile("ups_5kw_120v_a", "ups", "apc",     1, 5000.0, 120.0, 18.0, 48.0, 4.0,  180.0),
+    # ── UPS: 5 kW / 230 V / single-phase ──────────────────────────────────
+    PowerDeviceProfile("ups_5kw_230v_a", "ups", "eaton",   1, 5000.0, 230.0, 18.0, 48.0, 4.0,  200.0),
+    # ── UPS: 7.5 kW / 230 V / single-phase ───────────────────────────────
+    PowerDeviceProfile("ups_7k5_230v_a", "ups", "eaton",   1, 7500.0, 230.0, 20.0, 96.0, 5.0,  150.0),
+    PowerDeviceProfile("ups_7k5_230v_b", "ups", "eaton",   1, 7500.0, 230.0, 20.0, 96.0, 5.0,  800.0),
+    # ── UPS: 10 kW / 230 V / three-phase ─────────────────────────────────
+    PowerDeviceProfile("ups_10kw_230v_a", "ups", "liebert", 3, 10000.0, 230.0, 40.0, 120.0, 5.0, 365.0),
+    PowerDeviceProfile("ups_10kw_230v_b", "ups", "liebert", 3, 10000.0, 230.0, 40.0, 120.0, 5.0, 700.0),
+    PowerDeviceProfile("ups_10kw_230v_c", "ups", "liebert", 3, 10000.0, 230.0, 40.0, 120.0, 5.0, 500.0),
+    # ── UPS: 15 kW / 230 V / three-phase ─────────────────────────────────
+    PowerDeviceProfile("ups_15kw_230v_a", "ups", "liebert", 3, 15000.0, 230.0, 40.0, 192.0, 5.0,  180.0),
+    PowerDeviceProfile("ups_15kw_230v_b", "ups", "liebert", 3, 15000.0, 230.0, 40.0, 192.0, 5.0, 1000.0),
+    # ── PDU: parameter sweep ──────────────────────────────────────────────
+    PowerDeviceProfile("pdu_1k4_120v", "pdu", "apc",     1,  1440.0, 120.0, 0.0, 0.0, 0.0, 0.0),
+    PowerDeviceProfile("pdu_3k6_120v", "pdu", "raritan", 1,  3600.0, 120.0, 0.0, 0.0, 0.0, 0.0),
+    PowerDeviceProfile("pdu_7k2_230v", "pdu", "raritan", 1,  7200.0, 230.0, 0.0, 0.0, 0.0, 0.0),
+    PowerDeviceProfile("pdu_14k_230v", "pdu", "raritan", 3, 14400.0, 230.0, 0.0, 0.0, 0.0, 0.0),
+    # ── Network PSUs ──────────────────────────────────────────────────────
+    PowerDeviceProfile("net_200w_120v", "network", "cisco",   1, 200.0, 120.0, 0.0, 0.0, 0.0, 0.0),
+    PowerDeviceProfile("net_150w_120v", "network", "generic", 1, 150.0, 120.0, 0.0, 0.0, 0.0, 0.0),
+    # ── Environmental sensor ──────────────────────────────────────────────
+    PowerDeviceProfile("env_5w_120v", "env", "generic", 1, 5.0, 120.0, 0.0, 0.0, 0.0, 0.0),
 ]
 
 
@@ -174,10 +188,13 @@ def _circadian_load_factor(timestep: int, interval_minutes: int) -> float:
     return float(np.clip(base + np.random.normal(0, 0.03), 0.1, 1.0))
 
 
-def _battery_voltage_from_charge(charge_pct: float) -> float:
-    """Approximate lead-acid open-circuit voltage (V) from charge %."""
-    # APC SUA3000: nominal 12V*2 = 24V pack; full ~26.4V, depleted ~20.0V
-    return 20.0 + 6.4 * (charge_pct / 100.0)
+def _battery_voltage_from_charge(charge_pct: float, rated_battery_v: float = 24.0) -> float:
+    """Approximate lead-acid string voltage (V) from charge % and rated string voltage.
+
+    Scales linearly from 83.3% of rated (depleted) to 110% of rated (full),
+    matching the classic 24V pack behaviour: 20.0 V → 26.4 V at rated_battery_v=24.
+    """
+    return rated_battery_v * (0.833 + 0.267 * (charge_pct / 100.0))
 
 
 def _runtime_estimate(battery_ah: float, charge_pct: float, load_w: float, voltage_v: float = 24.0) -> float:
@@ -220,7 +237,7 @@ def _inject_power_anomaly(
     clearly above-normal load values, giving the LSTM a strong learnable signature.
     All other fault types apply full-strength injection uniformly throughout the event.
     """
-    nominal_v = 230.0 if profile.vendor in ("liebert", "raritan") else 120.0
+    nominal_v = profile.nominal_voltage_v
 
     if anomaly_type == "battery_drain":
         drain = event.drain_amount if event else random.uniform(40, 70)
@@ -371,17 +388,17 @@ def _build_power_row(
         charge_delta = 0.02 if load_pct < 40 else -0.01
         charge_pct = float(np.clip(charge_pct + charge_delta + np.random.normal(0, 0.05), 0, 100))
         effective_charge = charge_pct * deg
-        batt_voltage = _battery_voltage_from_charge(effective_charge)
+        batt_voltage = _battery_voltage_from_charge(effective_charge, profile.rated_battery_v)
         batt_temp = 25.0 + load_factor * 8 + np.random.normal(0, 0.5)
-        runtime_min = _runtime_estimate(profile.battery_ah, effective_charge, output_power_w, batt_voltage)
+        runtime_min = _runtime_estimate(profile.battery_ah, effective_charge, output_power_w, profile.rated_battery_v)
     else:
         charge_pct = 100.0
         batt_voltage = 0.0
         batt_temp = 20.0 + np.random.normal(0, 0.3)
         runtime_min = 0.0
 
-    # Nominal input voltage by vendor convention
-    nominal_input_v = 230.0 if profile.vendor in ("liebert", "raritan") else 120.0
+    # Nominal input voltage comes from the explicit profile field (not inferred from vendor)
+    nominal_input_v = profile.nominal_voltage_v
     l1, l2, l3 = _phase_voltages(nominal_input_v, profile.phase_count)
     avg_v = (l1 + l2 + l3) / 3
     vol_imbalance = (max(abs(l1 - avg_v), abs(l2 - avg_v), abs(l3 - avg_v)) / avg_v * 100
@@ -418,6 +435,11 @@ def _build_power_row(
         "device_category": profile.device_category,
         "vendor": profile.vendor,
         "phase_count": profile.phase_count,
+        # Device registration constants — used by normalize_absolute_features() in preprocessing.
+        # In production these come from SNMP discovery or device registration (not computed here).
+        "rated_capacity_w": profile.rated_capacity_w,
+        "nominal_voltage_v": profile.nominal_voltage_v,
+        "rated_battery_v": profile.rated_battery_v,
         # BASELINE_UPS_FEATURES — canonical names
         "battery_charge_pct": round(charge_pct, 2),
         "battery_voltage_v": round(batt_voltage, 3),
