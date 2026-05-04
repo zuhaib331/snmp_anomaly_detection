@@ -48,6 +48,10 @@ PHASE_LEVEL_FEATURES: tuple[str, ...] = BASELINE_UPS_FEATURES + (
     "output_current_l3",
     "voltage_imbalance_pct",
     "current_skew_pct",
+    # B3: voltage drop rate-of-change — amplifies phase sag signal diluted in global MSE
+    "voltage_drop_delta_l1",
+    "voltage_drop_delta_l2",
+    "voltage_drop_delta_l3",
 )
 
 # Features used for battery RUL forecasting

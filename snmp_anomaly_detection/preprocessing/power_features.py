@@ -45,6 +45,15 @@ def add_delta_features(df: pd.DataFrame) -> pd.DataFrame:
     df["battery_charge_delta"] = np.sign(charge_diff)   * np.log1p(np.abs(charge_diff))
     df["temperature_delta"]    = np.sign(temp_diff)     * np.log1p(np.abs(temp_diff))
     df["output_load_delta"]    = np.sign(load_diff)     * np.log1p(np.abs(load_diff))
+    # B3: voltage drop deltas — only negative diffs (drops) kept; rises clamped to 0.
+    # A phase sag only affects 3 of 32 features; clipping to drops amplifies the sag
+    # signal so it is not diluted in the global MSE across all features.
+    _phase_v = ["input_voltage_l1", "input_voltage_l2", "input_voltage_l3"]
+    if all(c in df.columns for c in _phase_v):
+        for col in _phase_v:
+            drop = df.groupby("device_id")[col].diff().fillna(0.0).clip(upper=0)
+            tgt = col.replace("input_voltage_", "voltage_drop_delta_")
+            df[tgt] = np.sign(drop) * np.log1p(np.abs(drop))
     return df
 
 

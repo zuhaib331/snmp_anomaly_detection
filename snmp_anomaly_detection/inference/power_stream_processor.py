@@ -50,6 +50,19 @@ _DELTA_TARGETS: tuple[str, ...] = (
     "output_load_delta",
 )
 
+# B3: per-phase voltage drop deltas — only negative diffs (drops) kept.
+# Mirrors the clip(upper=0) branch added to add_delta_features() in power_features.py.
+_VOLT_DROP_SOURCES: tuple[str, ...] = (
+    "input_voltage_l1",
+    "input_voltage_l2",
+    "input_voltage_l3",
+)
+_VOLT_DROP_TARGETS: tuple[str, ...] = (
+    "voltage_drop_delta_l1",
+    "voltage_drop_delta_l2",
+    "voltage_drop_delta_l3",
+)
+
 # Features excluded from attribution — confirmed zero ground-truth deviation
 _ATTRIBUTION_EXCLUDE: frozenset[str] = frozenset({"input_frequency_hz"})
 
@@ -390,8 +403,18 @@ class PowerStreamProcessor:
             else:
                 fv[tgt] = 0.0  # first event for this device — no previous value
 
+        # B3: voltage drop deltas — only negative diffs kept (rises clamped to 0).
+        for src, tgt in zip(_VOLT_DROP_SOURCES, _VOLT_DROP_TARGETS):
+            cur = fv.get(src, 0.0)
+            if prev is not None:
+                diff = min(cur - prev.get(src, cur), 0.0)
+                fv[tgt] = float(np.sign(diff) * np.log1p(abs(diff)))
+            else:
+                fv[tgt] = 0.0
+
         # Persist current (post-log1p) values for the next event from this device
-        self._prev_raw[event.device_id] = {src: fv.get(src, 0.0) for src in _DELTA_SOURCES}
+        all_prev_srcs = list(_DELTA_SOURCES) + list(_VOLT_DROP_SOURCES)
+        self._prev_raw[event.device_id] = {src: fv.get(src, 0.0) for src in all_prev_srcs}
 
     def _score_detailed(
         self,
