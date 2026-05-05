@@ -29,6 +29,7 @@ def _import_power_steps() -> dict:
     from snmp_anomaly_detection.training.train_baseline_power import main as train_baseline_main
     from snmp_anomaly_detection.training.train_phase_model import main as train_phase_main
     from snmp_anomaly_detection.training.train_battery_rul import main as train_rul_main
+    from snmp_anomaly_detection.training.train_iforest_power import main as train_iforest_main
     from snmp_anomaly_detection.evaluation.power_eval import main as evaluate_baseline_main
     from snmp_anomaly_detection.evaluation.rul_eval import main as evaluate_rul_main
     from snmp_anomaly_detection.inference.dual_model_scorer import main as detect_power_csv_main
@@ -51,6 +52,7 @@ def _import_power_steps() -> dict:
         "train-power-baseline": train_baseline_main,
         "train-power-phase": train_phase_main,
         "train-battery-rul": train_rul_main,
+        "train-power-iforest": train_iforest_main,
         "evaluate-power-baseline": evaluate_baseline_main,
         "predict-battery-rul": evaluate_rul_main,
         "detect-power-csv": detect_power_csv_main,
@@ -65,6 +67,7 @@ _POWER_STEPS = (
     "train-power-baseline",
     "train-power-phase",
     "train-battery-rul",
+    "train-power-iforest",
     "evaluate-power-baseline",
     "predict-battery-rul",
     "detect-power-csv",

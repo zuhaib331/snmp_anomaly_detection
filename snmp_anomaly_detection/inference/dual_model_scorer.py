@@ -67,6 +67,10 @@ class DualModelResult:
     phase_timestep_errors: list[float] = field(default_factory=list)
     phase_peak_timestep: str = ""
     phase_top_features: list[str] = field(default_factory=list)
+    iforest_score: float = 0.0
+    iforest_threshold: float = 0.0
+    iforest_flag: int = 0
+    iforest_top_features: list[str] = field(default_factory=list)
 
 
 def _require_torch() -> None:
@@ -180,6 +184,19 @@ def run_dual_detection(
     phase_normal_stds   = phase_meta.get("normal_feature_error_stds", {})
     phase_cat_thresholds = phase_meta.get("per_category_thresholds", {})
 
+    # Load IF artifacts (optional — scoring is skipped gracefully if not trained yet)
+    iforest_models: dict = {}
+    iforest_thresholds: dict = {}
+    iforest_feature_cols: dict = {}
+    if paths.iforest_model_file.exists() and paths.iforest_metadata_file.exists():
+        iforest_models = joblib.load(paths.iforest_model_file)
+        with open(paths.iforest_metadata_file) as f:
+            _if_meta = json.load(f)
+        iforest_thresholds = {cat: v["threshold"] for cat, v in _if_meta.items()}
+        # Per-category feature lists saved at training time (E2).
+        # Falls back to all baseline_cols for models trained before E2.
+        iforest_feature_cols = {cat: v["feature_cols"] for cat, v in _if_meta.items() if "feature_cols" in v}
+
     # Load and preprocess dataset
     df = load_power_dataset(paths)
     df = aggregate_phase_metrics(df)
@@ -250,6 +267,34 @@ def run_dual_detection(
             else:
                 combined = int(b_flag and p_flag)
 
+            # Isolation Forest: score the last timestep's feature vector (most recent
+            # observation). Using the last timestep means IF reacts to the current state,
+            # not a sequence average — making it sensitive to point anomalies.
+            if_score = 0.0
+            if_threshold = 0.0
+            if_flag = 0
+            if_top_features: list[str] = []
+            clf = iforest_models.get(device_category)
+            if clf is not None:
+                last_vec = baseline_vals[i + baseline_seq_len - 1 : i + baseline_seq_len]
+                cat_cols = iforest_feature_cols.get(device_category, baseline_cols)
+                col_indices = [baseline_cols.index(c) for c in cat_cols]
+                last_vec_filtered = last_vec[:, col_indices]
+                if_score = float(clf.score_samples(last_vec_filtered)[0])
+                if_threshold = iforest_thresholds.get(device_category, -0.5)
+                if_flag = int(if_score < if_threshold)
+                # Attribution uses the full last_vec so ranking reflects all features,
+                # but skips any feature excluded from this category's IF model.
+                abs_devs = np.abs(last_vec[0])
+                top_idx = np.argsort(abs_devs)[::-1]
+                if_top_features = [
+                    baseline_cols[j]
+                    for j in top_idx[:5]
+                    if abs_devs[j] > 0.5
+                    and baseline_cols[j] not in _ATTRIBUTION_EXCLUDE
+                    and baseline_cols[j] in cat_cols
+                ][:3]
+
             # Rule-based overload: output_load_pct > 100 is physically impossible during normal
             # operation (synthetic data caps normal at 100). Zero false-positive supplement.
             overload_rule = 0
@@ -258,7 +303,7 @@ def run_dual_detection(
                 if win_load.max() > 100.0:
                     overload_rule = 1
 
-            final = int(combined or overload_rule)
+            final = int(combined or overload_rule or if_flag)
 
             true_label = int(labels[i : i + seq_len].max())
             seen_types = list({t for t in anomaly_types[i : i + seq_len] if t != "none"})
@@ -292,6 +337,10 @@ def run_dual_detection(
                 phase_timestep_errors=p_detail["timestep_errors"],
                 phase_peak_timestep=win_timestamps[p_peak_idx],
                 phase_top_features=p_detail["top_features"],
+                iforest_score=round(if_score, 6),
+                iforest_threshold=round(if_threshold, 6),
+                iforest_flag=if_flag,
+                iforest_top_features=if_top_features,
             ))
 
     return results
@@ -334,6 +383,8 @@ def _triggered_by(r: DualModelResult) -> str:
         return "baseline_model"
     if r.phase_anomaly:
         return "phase_model"
+    if r.iforest_flag:
+        return "iforest_only"
     return "unknown"
 
 
@@ -364,6 +415,7 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
             "flagged_baseline": 0,
             "flagged_phase": 0,
             "flagged_combined": 0,
+            "flagged_iforest": 0,
             "true_anomaly_windows": 0,
         })
         entry["total_windows"] += 1
@@ -371,6 +423,7 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
         entry["flagged_phase"] += r.phase_anomaly
         entry["flagged_overload_rule"] = entry.get("flagged_overload_rule", 0) + r.overload_rule_flag
         entry["flagged_combined"] += r.combined_flag
+        entry["flagged_iforest"] += r.iforest_flag
         entry["flagged_final"] = entry.get("flagged_final", 0) + r.final_flag
         entry["true_anomaly_windows"] += r.true_label
 
@@ -393,10 +446,12 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
         entry = by_category.setdefault(r.device_category, {
             "device_category": r.device_category,
             "total_windows": 0,
+            "flagged_iforest": 0,
             "flagged_final": 0,
             "true_anomaly_windows": 0,
         })
         entry["total_windows"] += 1
+        entry["flagged_iforest"] += r.iforest_flag
         entry["flagged_final"] += r.final_flag
         entry["true_anomaly_windows"] += r.true_label
 
@@ -409,6 +464,7 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
         "flagged_by_baseline": sum(r.baseline_anomaly for r in results),
         "flagged_by_phase": sum(r.phase_anomaly for r in results),
         "flagged_by_overload_rule": sum(r.overload_rule_flag for r in results),
+        "flagged_by_iforest": sum(r.iforest_flag for r in results),
         "flagged_combined": sum(r.combined_flag for r in results),
         "flagged_final": sum(r.final_flag for r in results),
         "true_anomaly_windows": sum(r.true_label for r in results),
@@ -487,6 +543,13 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
                     ts for ts, err in zip(r.window_timestamps, r.phase_timestep_errors)
                     if err > r.phase_threshold
                 ],
+            },
+            "iforest": {
+                "score": r.iforest_score,
+                "threshold": r.iforest_threshold,
+                "score_ratio": round(r.iforest_score / r.iforest_threshold, 2) if r.iforest_threshold else 0.0,
+                "flagged": bool(r.iforest_flag),
+                "top_features": r.iforest_top_features,
             },
             "rul": rul_entry,
         })

@@ -75,6 +75,25 @@ BASELINE_MODEL_CATEGORIES: frozenset[str] = frozenset({"ups", "pdu", "network", 
 PHASE_MODEL_CATEGORIES: frozenset[str] = frozenset({"ups"})
 BATTERY_RUL_CATEGORIES: frozenset[str] = frozenset({"ups"})
 
+# Features excluded from IForest training and scoring per device category.
+# Battery features are always 0.0 for non-UPS devices — constant zeros corrupt
+# isolation tree splits and shift the score distribution, producing false positives.
+# output_frequency_hz is excluded for non-UPS for the same reason the LSTM excludes
+# it from MSE: grid noise (~50/60 Hz ± tiny variation) is not a fault signal.
+_IF_BATTERY_FEATURES: frozenset[str] = frozenset({
+    "battery_voltage_ratio",
+    "battery_current_ratio",
+    "on_battery_status",
+    "battery_replace_status",
+})
+
+IF_EXCLUDED_FEATURES: dict[str, frozenset[str]] = {
+    "ups":     frozenset(),
+    "pdu":     _IF_BATTERY_FEATURES | {"output_frequency_hz"},
+    "network": _IF_BATTERY_FEATURES | {"output_frequency_hz"},
+    "env":     _IF_BATTERY_FEATURES | {"output_frequency_hz"},
+}
+
 
 @dataclass(frozen=True)
 class ProjectPaths:
@@ -127,6 +146,12 @@ class ProjectPaths:
     )
     device_stats_file: Path = field(
         default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual" / "device_stats.json"
+    )
+    iforest_model_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual" / "iforest_models.pkl"
+    )
+    iforest_metadata_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual" / "iforest_metadata.json"
     )
 
     def ensure_directories(self) -> None:

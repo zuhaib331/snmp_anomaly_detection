@@ -1,8 +1,8 @@
 # SNMP Anomaly Detection — Task Backlog
 
 <!-- Managed list — update Status field as work progresses. -->
-<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F5/F6 → E1 → C1 → D1/D2/D3/D4 -->
-<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3 -->
+<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F5/F6 → E1 → E2 → E3 → E4 → E5 → E6 → C1 → D1/D2/D3/D4 -->
+<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2 -->
 
 <!-- ================================================================ -->
 <!-- F-series: Code review bug fixes (must resolve before feature work) -->
@@ -797,6 +797,253 @@ print('IF flag rate:', df['iforest_flag'].mean())
 ```
 
 Target: IF flag rate < 0.02 on normal traffic; ≥ 0.70 on injected anomaly rows.
+
+---
+
+## E2 — Per-category feature masks for Isolation Forest
+**Status:** Done — 2026-05-05  
+**Priority:** High — 117 of 118 `iforest_only` events are false positives; root cause is battery features (always 0.0 for PDU/network/env) and `output_frequency_hz` (grid noise) being fed to IF for all categories  
+**Depends on:** E1 (done)  
+**Files:** [training/train_iforest_power.py](../snmp_anomaly_detection/training/train_iforest_power.py), [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+
+### Issue
+
+The LSTM already excludes `output_frequency_hz` from MSE for non-UPS categories (`_NON_UPS_MSE_EXCLUDE`) and never scores phase features on PDU/network/env. IF has no equivalent — it trains and scores on all 15 `BASELINE_UPS_FEATURES` for every category, including:
+
+| Feature | Problem for non-UPS |
+|---|---|
+| `battery_voltage_ratio` | Always exactly 0.0 for PDU/network/env — adds noise to isolation trees |
+| `battery_current_ratio` | Always exactly 0.0 — same |
+| `on_battery_status` | Always 0 — same |
+| `battery_replace_status` | Always 0 — same |
+| `output_frequency_hz` | Grid noise (~50/60 Hz ± tiny variation) — already excluded from LSTM MSE for non-UPS |
+
+These zero/noise features produce meaningless splits in the IF trees, shifting the score distribution and making the threshold unreliable.
+
+### Fix
+
+Add `IF_CATEGORY_FEATURES` to `config.py`:
+
+```python
+# Features to exclude from IF scoring per category.
+# Battery features are always 0 for non-UPS — useless for isolation and shift score distribution.
+_BATTERY_ONLY_FEATURES: frozenset[str] = frozenset({
+    "battery_voltage_ratio", "battery_current_ratio",
+    "on_battery_status", "battery_replace_status",
+})
+
+IF_EXCLUDED_FEATURES: dict[str, frozenset[str]] = {
+    "ups":     frozenset(),
+    "pdu":     _BATTERY_ONLY_FEATURES | {"output_frequency_hz"},
+    "network": _BATTERY_ONLY_FEATURES | {"output_frequency_hz"},
+    "env":     _BATTERY_ONLY_FEATURES | {"output_frequency_hz"},
+}
+```
+
+In `train_iforest_power.py`, use per-category feature lists:
+```python
+from snmp_anomaly_detection.config import IF_EXCLUDED_FEATURES
+
+excluded = IF_EXCLUDED_FEATURES.get(str(category), frozenset())
+cat_features = [f for f in feature_cols if f not in excluded]
+X = scaler.transform(group[cat_features])
+# Save cat_features in metadata so scoring uses the same list
+metadata[str(category)]["feature_cols"] = cat_features
+```
+
+In `dual_model_scorer.py`, load `feature_cols` from metadata per category and use it when calling `clf.score_samples()`.
+
+### Validation
+After retraining IF and re-running detection:
+- `iforest_only` FP count should drop from 117 to < 10
+- Recall on anomaly windows should improve (battery noise no longer dilutes anomaly signal)
+
+---
+
+## E3 — Score all window timesteps, take minimum (most anomalous point)
+**Status:** Pending  
+**Priority:** High — current implementation scores only the last timestep; faults that peak mid-window are missed entirely, keeping IF recall at 3–16%  
+**Depends on:** E2 (feature masks should be in place first so min-score is computed on clean features)  
+**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+
+### Issue
+
+```python
+# Current — only last timestep
+last_vec = baseline_vals[i + baseline_seq_len - 1 : i + baseline_seq_len]
+if_score = float(clf.score_samples(last_vec)[0])
+```
+
+Most faults build up over several timesteps and peak in the middle of the window, not at the end. Scoring only the last timestep means IF misses the peak in those cases. For a 20-timestep window with a fault at timestep 8, the anomaly signal is completely ignored.
+
+### Fix
+
+Score all timesteps in the baseline window and take the **minimum** (most negative = most anomalous):
+
+```python
+# After — all timesteps, most anomalous wins
+window_vecs = baseline_vals[i : i + baseline_seq_len]   # (seq_len, n_feat)
+all_scores = clf.score_samples(window_vecs)              # (seq_len,)
+if_score = float(all_scores.min())
+if_peak_idx = int(np.argmin(all_scores))
+if_peak_timestep = win_timestamps[if_peak_idx]
+```
+
+Store `if_peak_timestep` in `DualModelResult` and surface it in the `iforest` sub-dict of `anomaly_windows_detail.json` (same pattern as `baseline_peak_timestep`).
+
+### Expected improvement
+IF recall on UPS anomaly windows: 3.1% → target > 30%
+
+---
+
+## E4 — Raise IF score_ratio minimum to filter borderline flags
+**Status:** Pending  
+**Priority:** Medium — 117 FP events have score_ratio 1.00–1.10; a minimum ratio guard removes these without retraining  
+**Depends on:** E2 and E3 (implement feature masks and all-timestep scoring first; recalibrate threshold after)  
+**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+
+### Issue
+
+Current FP score ratios are tightly clustered at 1.00–1.10 (mean=1.02). A real anomaly should produce score ratios of 1.5+. The 1st-percentile threshold is a good starting point but is not conservative enough when training data is small (env: 1,769 samples, network: 3,673 samples).
+
+### Fix
+
+Add a minimum `score_ratio` guard in `dual_model_scorer.py`:
+
+```python
+IF_MIN_SCORE_RATIO: float = 1.15   # must be at least 15% below threshold to flag
+```
+
+```python
+if_flag = int(if_score < if_threshold and
+              (if_threshold != 0) and
+              (if_score / if_threshold) >= IF_MIN_SCORE_RATIO)
+```
+
+Add `IF_MIN_SCORE_RATIO` to `config.py` so it can be tuned per deployment without code changes.
+
+### Note
+This is a tuning fix on top of E2+E3. Re-evaluate the right ratio value after E2 and E3 are implemented — the distribution of FP ratios will shift once battery features are excluded and all-timestep scoring is in place.
+
+---
+
+## E5 — IForest CSV performance: batch score per device, not per window
+**Status:** Pending  
+**Priority:** Medium — `detect-power-csv` is noticeably slow after adding IForest; root cause is ~42,000 individual `score_samples()` calls instead of 21  
+**Depends on:** E2 (feature masks should be in place first so batch call uses the right columns)  
+**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+
+### Issue
+
+The current scorer calls `clf.score_samples()` once per window, inside the stride-1 loop:
+
+```python
+# Called ~2000 times per device, ~42,000 times total
+last_vec = baseline_vals[i + baseline_seq_len - 1 : i + baseline_seq_len]
+if_score = float(clf.score_samples(last_vec)[0])
+```
+
+sklearn's `IsolationForest.score_samples()` has significant per-call overhead — it traverses all 200 trees for every call. With stride=1 and 21 devices averaging ~2000 rows each, this is **~42,000 × 200 = 8.4 million tree traversals**, all with individual Python function call overhead.
+
+The LSTM calls are equally frequent but PyTorch operations are compiled and GPU-friendly. sklearn's IForest does not share that advantage.
+
+### Fix
+
+**Step 1 — Pre-score all rows for a device in one batch call before the window loop:**
+
+```python
+# Before the window loop, once per device
+all_if_scores: np.ndarray | None = None
+clf = iforest_models.get(device_category)
+if clf is not None:
+    cat_feature_cols = iforest_metadata.get(device_category, {}).get("feature_cols", baseline_cols)
+    all_if_scores = clf.score_samples(baseline_vals[:, [baseline_cols.index(c) for c in cat_feature_cols]])
+    # shape: (n_rows,) — one score per row, computed in a single vectorized call
+
+# Inside the window loop, just index — no sklearn call
+if all_if_scores is not None:
+    if_score = float(all_if_scores[i + baseline_seq_len - 1])
+    if_flag = int(if_score < if_threshold)
+```
+
+This reduces **~42,000 sklearn calls → 21 calls** (one per device). sklearn can also use its internal parallelism more effectively when scoring a batch.
+
+**Step 2 (optional) — Reduce n_estimators from 200 → 100 in training:**
+
+In [train_iforest_power.py:47](../snmp_anomaly_detection/training/train_iforest_power.py#L47):
+```python
+clf = IsolationForest(n_estimators=100, random_state=42, contamination="auto")
+```
+
+200 estimators is double the sklearn default. Halving it halves scoring time with negligible precision impact — especially relevant since the model's precision problems are not caused by too few trees.
+
+### Expected improvement
+`detect-power-csv` wall-clock time: should drop by 60–80% for the IForest scoring portion.
+
+---
+
+## E6 — IForest streaming: decouple from LSTM buffer, score on every incoming row
+**Status:** Pending  
+**Priority:** Medium — in streaming mode IForest only fires when a full 20-row LSTM window is ready; it is unnecessarily blocked by the LSTM buffer requirement when it only needs 1 row  
+**Depends on:** E2 (feature masks), E5 (batch scoring pattern understood)  
+**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py)
+
+### Issue
+
+IForest scores individual feature vectors — it has no concept of sequences or time windows. But in the current implementation, IForest lives inside the LSTM window loop in `dual_model_scorer.py`. This means in streaming, IForest only runs when a device's rolling buffer has accumulated a full 20-row window and flushes to the LSTM.
+
+The result:
+- A sudden voltage spike at row 3 of a fresh device buffer will **not** be scored by IForest until 17 more rows arrive
+- IForest runs at the LSTM's cadence (every `seq_len` rows), not at its natural cadence (every SNMP poll)
+- This defeats the purpose of having a point-anomaly detector that is supposed to be faster than the LSTM
+
+The two models have fundamentally different latency requirements:
+
+| Model | Needs | Natural cadence |
+|---|---|---|
+| LSTM Autoencoder | 20-row sequence | Every `seq_len` rows (slow) |
+| Isolation Forest | 1 row (current reading) | Every SNMP poll (fast) |
+
+### Fix
+
+In `PowerStreamProcessor.process_event()`, call IForest **immediately on the new row** before the buffer check, independently of the LSTM:
+
+```python
+def process_event(self, event: PowerEvent) -> ScoringResult | None:
+    # Step 1 — IForest scores the current row immediately (no buffer needed)
+    if_score = 0.0
+    if_flag = 0
+    clf = self.iforest_models.get(event.device_category)
+    if clf is not None:
+        raw = np.array([[event.feature_values.get(c, 0.0) for c in self.iforest_feature_cols]])
+        scaled = self.baseline_scaler.transform(raw)
+        if_score = float(clf.score_samples(scaled)[0])
+        if_threshold = self.iforest_thresholds.get(event.device_category, -0.5)
+        if_flag = int(if_score < if_threshold)
+
+    # Step 2 — add row to rolling buffer
+    self._buffers[event.device_id].append(event)
+
+    # Step 3 — LSTM scores only when buffer is full
+    if len(self._buffers[event.device_id]) < self.seq_len:
+        # Buffer not ready — IForest result still emittable if flagged
+        if if_flag:
+            return ScoringResult(iforest_only=True, if_score=if_score, ...)
+        return None
+
+    # Step 4 — full window available: run LSTM, combine with IForest result
+    window = list(self._buffers[event.device_id])
+    lstm_result = self._score_lstm_window(window)
+    return self._combine(lstm_result, if_score, if_flag)
+```
+
+### Why this matters for production
+
+In a real datacenter, a sudden voltage transient (e.g. utility switching event) lasts 1–3 SNMP polls (~5–15 minutes at 5-min polling). The LSTM will not see this event until 20 polls later — 100 minutes after it happened. IForest should catch it immediately. Decoupling them means IForest can raise a fast early warning while the LSTM confirms or clears the alert when its window fills.
+
+### Also required
+- Load `iforest_models.pkl` and `iforest_metadata.json` in `PowerStreamProcessor.__init__()` (same pattern as baseline/phase model loading)
+- Expose `iforest_feature_cols` per category from metadata (needed after E2 adds per-category feature masks)
 
 ---
 
