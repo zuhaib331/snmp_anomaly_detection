@@ -1,8 +1,8 @@
 # SNMP Anomaly Detection — Task Backlog
 
 <!-- Managed list — update Status field as work progresses. -->
-<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F5/F6 → E1 → E2 → E3 → E4 → E5 → E6 → C1 → D1/D2/D3/D4 -->
-<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2 -->
+<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F5/F6 → E1 → E2 → E3 → E4 → E5 → E6 → E7 → C1 → D1/D2/D3/D4 -->
+<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2, E3, E5 -->
 
 <!-- ================================================================ -->
 <!-- F-series: Code review bug fixes (must resolve before feature work) -->
@@ -1044,6 +1044,109 @@ In a real datacenter, a sudden voltage transient (e.g. utility switching event) 
 ### Also required
 - Load `iforest_models.pkl` and `iforest_metadata.json` in `PowerStreamProcessor.__init__()` (same pattern as baseline/phase model loading)
 - Expose `iforest_feature_cols` per category from metadata (needed after E2 adds per-category feature masks)
+
+---
+
+## E7 — Two-stage alert lifecycle: SUSPECTED → CONFIRMED / CLEARED
+**Status:** Pending  
+**Priority:** High — without this, E6's fast IF alerts are stateless; the NOC sees a stream of `iforest_only` flags with no way to know which ones LSTM later agreed with or retracted  
+**Depends on:** E6 (IF must be decoupled from LSTM buffer first)  
+**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py)
+
+### Why this task exists
+
+After E6, IF fires immediately on every incoming row and LSTM fires once the 20-row buffer fills. In steady state (post cold-start) both score on every row and their results are available simultaneously — combining them is straightforward. The problem is **temporal misalignment** in two scenarios:
+
+1. **Cold start / device reconnect** — buffer has fewer than 20 rows; IF can flag but LSTM is silent. An `iforest_only` result is emitted with no follow-up.
+2. **Steady state borderline flags** — IF fires at row N; LSTM scores the window ending at row N and may agree or disagree. Without state, each scoring call is independent and there is no "LSTM confirmed this earlier IF alert" signal.
+
+The NOC needs to know the difference between:
+- IF fired, LSTM confirmed → **high-confidence alarm** (act now)
+- IF fired, LSTM cleared → **false positive** (auto-resolve, learning signal)
+- IF fired, LSTM still pending → **early warning** (watch, don't page yet)
+
+### What to build
+
+**1. `AlertState` enum in `power_stream_processor.py`**
+
+```python
+from enum import Enum
+
+class AlertState(str, Enum):
+    SUSPECTED  = "suspected"   # IF fired, LSTM hasn't weighed in yet
+    CONFIRMED  = "confirmed"   # both models agreed
+    LSTM_ONLY  = "lstm_only"   # LSTM flagged, IF didn't (gradual drift)
+    CLEARED    = "cleared"     # IF fired but LSTM did not confirm within window
+```
+
+**2. Per-device pending alert tracker in `PowerStreamProcessor`**
+
+```python
+@dataclass
+class PendingAlert:
+    if_score: float
+    if_flag_row: int          # absolute row index when IF fired
+    if_peak_timestep: str
+    if_top_features: list[str]
+    confirmed: bool = False
+```
+
+Add `_pending_alerts: dict[str, PendingAlert | None]` to `PowerStreamProcessor.__init__()`, keyed by `device_id`.
+
+**3. State machine logic in `process_event()`**
+
+```
+IF fires at row N:
+    → store PendingAlert(device_id, if_score, row=N)
+    → emit ScoringResult(alert_state=SUSPECTED, ...)  # fast early warning
+
+LSTM scores window ending at row N (or later):
+    → if pending alert exists for device and if_flag_row is within this window:
+        if lstm_flag:
+            emit ScoringResult(alert_state=CONFIRMED, ...)   # upgrade
+            clear pending alert
+        else:
+            emit ScoringResult(alert_state=CLEARED, ...)     # retract
+            clear pending alert
+    → if lstm_flag but no pending IF alert:
+        emit ScoringResult(alert_state=LSTM_ONLY, ...)
+
+Confirmation window timeout:
+    if pending alert is older than N_CONFIRMATION_WINDOWS (e.g. 3) without LSTM verdict:
+        emit CLEARED and discard
+```
+
+**4. `ScoringResult` schema update**
+
+Add `alert_state: AlertState` field. Replace the boolean `iforest_only` flag (E6) with `alert_state` — `iforest_only=True` maps to `SUSPECTED`.
+
+**5. Kafka output schema**
+
+Add `"alert_state"` to the emitted JSON alongside existing fields. The NOC dashboard reads this field to set severity:
+
+| `alert_state` | NOC display | Colour |
+|---|---|---|
+| `suspected` | Early warning | Amber |
+| `confirmed` | High-confidence alarm | Red |
+| `lstm_only` | Anomaly detected | Orange |
+| `cleared`   | Auto-resolved | Grey |
+
+### Key design notes
+
+- In **steady state** (buffer already full), IF and LSTM score the same row simultaneously. `CONFIRMED` is emitted in the same `process_event()` call — zero extra latency vs. today.
+- The `SUSPECTED` → `CONFIRMED/CLEARED` transition only adds latency during **cold start** (up to 20 polling cycles = ~100 min at 5-min polling). This is acceptable — you get an early warning immediately and confirmation shortly after.
+- `CLEARED` events are valuable as a **false-positive feedback signal** for future IF threshold tuning (E4).
+- `N_CONFIRMATION_WINDOWS = 3` (tunable in `config.py`) prevents orphaned `SUSPECTED` alerts from accumulating if a device stops sending data mid-window.
+
+### Validation
+
+```bash
+# After E6 + E7 are implemented, run Kafka dry-run and check alert_state distribution
+python3 -m snmp_anomaly_detection detect-power-kafka
+# Expect: normal traffic → no SUSPECTED or CONFIRMED alerts after calibration
+# Expect: injected spike → SUSPECTED at row N, CONFIRMED at row N+k (k ≤ seq_len)
+# Expect: transient spike (1-2 rows) → SUSPECTED then CLEARED within one window
+```
 
 ---
 

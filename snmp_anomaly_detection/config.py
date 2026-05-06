@@ -94,6 +94,11 @@ IF_EXCLUDED_FEATURES: dict[str, frozenset[str]] = {
     "env":     _IF_BATTERY_FEATURES | {"output_frequency_hz"},
 }
 
+# Minimum ratio of (if_score / if_threshold) required to raise an IF flag.
+# Filters borderline flags whose ratios cluster at 1.00–1.10 on normal data.
+# Revisit with real device data (A1) — auto-calibration per category planned (E4b).
+IF_MIN_SCORE_RATIO: float = 1.15
+
 
 @dataclass(frozen=True)
 class ProjectPaths:

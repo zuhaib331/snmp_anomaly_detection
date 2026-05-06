@@ -20,6 +20,7 @@ from snmp_anomaly_detection.config import (
     BASELINE_UPS_FEATURES,
     PHASE_LEVEL_FEATURES,
     PHASE_MODEL_CATEGORIES,
+    IF_MIN_SCORE_RATIO,
     PowerInferenceConfig,
     ProjectPaths,
 )
@@ -70,6 +71,7 @@ class DualModelResult:
     iforest_score: float = 0.0
     iforest_threshold: float = 0.0
     iforest_flag: int = 0
+    iforest_peak_timestep: str = ""
     iforest_top_features: list[str] = field(default_factory=list)
 
 
@@ -241,6 +243,21 @@ def run_dual_detection(
         # Normal operation: output_load_pct ≤ 100.  Any reading > 100 is definitively overload.
         raw_load_pct = device_df["output_load_pct"].values if "output_load_pct" in device_df.columns else None
 
+        # Pre-score all rows for this device in one batch call so the window loop
+        # only needs to slice and index — avoids ~2000 individual sklearn calls per device.
+        clf = iforest_models.get(device_category)
+        device_if_scores: np.ndarray | None = None
+        device_if_threshold = 0.0
+        device_if_col_indices: list[int] = []
+        device_if_cat_cols: list[str] = []
+        if clf is not None:
+            _cat_cols = iforest_feature_cols.get(device_category, baseline_cols)
+            _col_indices = [baseline_cols.index(c) for c in _cat_cols]
+            device_if_scores = clf.score_samples(baseline_vals[:, _col_indices])
+            device_if_threshold = iforest_thresholds.get(device_category, -0.5)
+            device_if_col_indices = _col_indices
+            device_if_cat_cols = _cat_cols
+
         seq_len = max(baseline_seq_len, phase_seq_len)
         for i in range(len(device_df) - seq_len):
             b_win = baseline_vals[i : i + baseline_seq_len]
@@ -267,32 +284,30 @@ def run_dual_detection(
             else:
                 combined = int(b_flag and p_flag)
 
-            # Isolation Forest: score the last timestep's feature vector (most recent
-            # observation). Using the last timestep means IF reacts to the current state,
-            # not a sequence average — making it sensitive to point anomalies.
+            # Isolation Forest: slice pre-computed per-row scores for this window,
+            # take the minimum (most anomalous timestep).
             if_score = 0.0
             if_threshold = 0.0
             if_flag = 0
+            if_peak_timestep = ""
             if_top_features: list[str] = []
-            clf = iforest_models.get(device_category)
-            if clf is not None:
-                last_vec = baseline_vals[i + baseline_seq_len - 1 : i + baseline_seq_len]
-                cat_cols = iforest_feature_cols.get(device_category, baseline_cols)
-                col_indices = [baseline_cols.index(c) for c in cat_cols]
-                last_vec_filtered = last_vec[:, col_indices]
-                if_score = float(clf.score_samples(last_vec_filtered)[0])
-                if_threshold = iforest_thresholds.get(device_category, -0.5)
-                if_flag = int(if_score < if_threshold)
-                # Attribution uses the full last_vec so ranking reflects all features,
-                # but skips any feature excluded from this category's IF model.
-                abs_devs = np.abs(last_vec[0])
+            if device_if_scores is not None:
+                win_scores = device_if_scores[i : i + baseline_seq_len]
+                if_peak_idx = int(np.argmin(win_scores))
+                if_score = float(win_scores[if_peak_idx])
+                if_peak_timestep = win_timestamps[if_peak_idx]
+                if_threshold = device_if_threshold
+                score_ratio = (if_score / if_threshold) if if_threshold != 0 else 0.0
+                if_flag = int(if_score < if_threshold and score_ratio >= IF_MIN_SCORE_RATIO)
+                # Attribution: full (unfiltered) vector at the peak timestep.
+                abs_devs = np.abs(baseline_vals[i + if_peak_idx])
                 top_idx = np.argsort(abs_devs)[::-1]
                 if_top_features = [
                     baseline_cols[j]
                     for j in top_idx[:5]
                     if abs_devs[j] > 0.5
                     and baseline_cols[j] not in _ATTRIBUTION_EXCLUDE
-                    and baseline_cols[j] in cat_cols
+                    and baseline_cols[j] in device_if_cat_cols
                 ][:3]
 
             # Rule-based overload: output_load_pct > 100 is physically impossible during normal
@@ -340,6 +355,7 @@ def run_dual_detection(
                 iforest_score=round(if_score, 6),
                 iforest_threshold=round(if_threshold, 6),
                 iforest_flag=if_flag,
+                iforest_peak_timestep=if_peak_timestep,
                 iforest_top_features=if_top_features,
             ))
 
@@ -549,6 +565,7 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
                 "threshold": r.iforest_threshold,
                 "score_ratio": round(r.iforest_score / r.iforest_threshold, 2) if r.iforest_threshold else 0.0,
                 "flagged": bool(r.iforest_flag),
+                "peak_timestep": r.iforest_peak_timestep,
                 "top_features": r.iforest_top_features,
             },
             "rul": rul_entry,
