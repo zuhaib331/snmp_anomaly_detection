@@ -1,8 +1,8 @@
 # SNMP Anomaly Detection — Task Backlog
 
 <!-- Managed list — update Status field as work progresses. -->
-<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F5/F6 → E1 → E2 → E3 → E4 → E5 → E6 → E7 → C1 → D1/D2/D3/D4 -->
-<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2, E3, E5 -->
+<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F5/F6 → E1 → E2 → E3 → E4 → E5 → E6 → E7 → C1 → E8 → D1/D2/D3/D4 -->
+<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2, E3, E4, E5, E6, E7 -->
 
 <!-- ================================================================ -->
 <!-- F-series: Code review bug fixes (must resolve before feature work) -->
@@ -706,7 +706,7 @@ clickhouse-connect>=0.7
 <!-- ================================================================ -->
 
 ## E1 — Isolation Forest as a real second detection model
-**Status:** Pending  
+**Status:** Done — 2026-05-05  
 **Priority:** High — the NOC dashboard already shows an "Isolation Forest" panel as if it is live; currently no IF model exists anywhere in the pipeline  
 **Depends on:** B1 and B2 complete (streaming path and training data should be stable before adding a third scoring signal)
 
@@ -861,7 +861,7 @@ After retraining IF and re-running detection:
 ---
 
 ## E3 — Score all window timesteps, take minimum (most anomalous point)
-**Status:** Pending  
+**Status:** Done — 2026-05-06  
 **Priority:** High — current implementation scores only the last timestep; faults that peak mid-window are missed entirely, keeping IF recall at 3–16%  
 **Depends on:** E2 (feature masks should be in place first so min-score is computed on clean features)  
 **File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
@@ -897,7 +897,7 @@ IF recall on UPS anomaly windows: 3.1% → target > 30%
 ---
 
 ## E4 — Raise IF score_ratio minimum to filter borderline flags
-**Status:** Pending  
+**Status:** Done — 2026-05-06  
 **Priority:** Medium — 117 FP events have score_ratio 1.00–1.10; a minimum ratio guard removes these without retraining  
 **Depends on:** E2 and E3 (implement feature masks and all-timestep scoring first; recalibrate threshold after)  
 **File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
@@ -928,7 +928,7 @@ This is a tuning fix on top of E2+E3. Re-evaluate the right ratio value after E2
 ---
 
 ## E5 — IForest CSV performance: batch score per device, not per window
-**Status:** Pending  
+**Status:** Done — 2026-05-06  
 **Priority:** Medium — `detect-power-csv` is noticeably slow after adding IForest; root cause is ~42,000 individual `score_samples()` calls instead of 21  
 **Depends on:** E2 (feature masks should be in place first so batch call uses the right columns)  
 **File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
@@ -983,7 +983,7 @@ clf = IsolationForest(n_estimators=100, random_state=42, contamination="auto")
 ---
 
 ## E6 — IForest streaming: decouple from LSTM buffer, score on every incoming row
-**Status:** Pending  
+**Status:** Done — 2026-05-07  
 **Priority:** Medium — in streaming mode IForest only fires when a full 20-row LSTM window is ready; it is unnecessarily blocked by the LSTM buffer requirement when it only needs 1 row  
 **Depends on:** E2 (feature masks), E5 (batch scoring pattern understood)  
 **File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py)
@@ -1048,7 +1048,7 @@ In a real datacenter, a sudden voltage transient (e.g. utility switching event) 
 ---
 
 ## E7 — Two-stage alert lifecycle: SUSPECTED → CONFIRMED / CLEARED
-**Status:** Pending  
+**Status:** Done — 2026-05-07  
 **Priority:** High — without this, E6's fast IF alerts are stateless; the NOC sees a stream of `iforest_only` flags with no way to know which ones LSTM later agreed with or retracted  
 **Depends on:** E6 (IF must be decoupled from LSTM buffer first)  
 **File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py)
@@ -1147,6 +1147,89 @@ python3 -m snmp_anomaly_detection detect-power-kafka
 # Expect: injected spike → SUSPECTED at row N, CONFIRMED at row N+k (k ≤ seq_len)
 # Expect: transient spike (1-2 rows) → SUSPECTED then CLEARED within one window
 ```
+
+---
+
+## E8 — Separate telemetry stream from alert lifecycle stream
+**Status:** Pending  
+**Priority:** Medium — do this before wiring a real NOC; not urgent while C1 and real devices are still missing  
+**Depends on:** C1 (ClickHouse), D1 (NOC data wiring) — the two-stream split only becomes necessary when there are two real consumers  
+**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py), [streaming/detect_power_kafka.py](../snmp_anomaly_detection/streaming/detect_power_kafka.py)
+
+### Why this task exists
+
+E7 added `alert_state` directly onto `PowerScoringResult`, which mixes two concerns into one stream:
+
+1. **Telemetry** — every scored window, all error values and scores → should go to ClickHouse (C1) → Grafana dashboards
+2. **Alert lifecycle** — state changes the NOC must act on → should go to NOC / PagerDuty
+
+Symptoms of the current design that will cause problems in production:
+
+| Problem | Effect |
+|---------|--------|
+| Normal windows carry `alert_state=LSTM_ONLY` | LSTM_ONLY is not an alert state — it means "no alert"; the field is misleading |
+| CLEARED emitted for every IF-only steady-state fire | If IF fires 50 times without LSTM confirming, 50 CLEARED records are written — very noisy |
+| Multiple SUSPECTED emitted per device during cold start | NOC sees 3 ambers, only 1 gets resolved; 2 stay open forever |
+| Alert logic lives inside the scoring record | Forces every consumer to understand alert lifecycle instead of just displaying scores |
+
+### What to build
+
+**1. New `AlertEvent` dataclass (separate from `PowerScoringResult`)**
+
+```python
+@dataclass
+class AlertEvent:
+    alert_id: str           # stable UUID per device per incident (generated at OPENED)
+    device_id: str
+    device_category: str
+    transition: str         # "opened" | "confirmed" | "closed"
+    trigger: str            # "iforest" | "lstm" | "both" | "timeout"
+    peak_if_score: float
+    if_fire_count: int      # how many times IF fired before resolution
+    opened_at: datetime
+    resolved_at: datetime | None
+    window_start: str
+    window_end: str
+```
+
+**2. `PowerStreamProcessor.process_event()` returns a tuple**
+
+```python
+def process_event(self, event: PowerEvent) -> tuple[PowerScoringResult | None, AlertEvent | None]:
+    ...
+    return scoring_result, alert_event  # alert_event is None when no state change
+```
+
+`ScoringResult` has no `alert_state` field — it just has scores and flags.  
+`AlertEvent` is only emitted when the lifecycle state actually changes (opened, confirmed, closed).
+
+**3. Cold-start: suppress duplicate SUSPECTED events**
+
+When IF fires multiple times during cold start (before the LSTM buffer fills):
+- First fire: emit `AlertEvent(transition="opened")`, store `PendingAlert`
+- Subsequent fires: update `PendingAlert.peak_if_score` and increment `PendingAlert.if_fire_count` silently — no new `AlertEvent`
+- At LSTM resolution: emit `AlertEvent(transition="confirmed" or "closed")` with `if_fire_count` reflecting all fires
+
+This gives the NOC: 1 OPENED → 1 CONFIRMED or CLOSED. Never orphaned ambers.
+
+**4. `detect_power_kafka.py` routes by stream**
+
+```python
+scoring_result, alert_event = processor.process_event(event)
+
+if scoring_result:
+    # Write to ClickHouse telemetry table (all windows)
+    write_to_clickhouse(scoring_result)
+
+if alert_event:
+    # Write to NOC / alert table (state changes only)
+    write_alert_event(alert_event)
+    print(f"[{alert_event.transition.upper()}] {alert_event.device_id} ...")
+```
+
+### When to implement
+
+After C1 (ClickHouse storage) and D1 (NOC data wiring) are started — that is when two real consumers exist and the split becomes necessary rather than optional. Implementing E8 before C1 would mean redesigning the interface a second time.
 
 ---
 

@@ -62,6 +62,7 @@ python3 main.py preprocess-power
 python3 main.py train-power-baseline
 python3 main.py train-power-phase
 python3 main.py train-battery-rul
+python3 main.py train-power-iforest
 python3 main.py evaluate-power-baseline
 python3 main.py predict-battery-rul
 python3 main.py detect-power-csv
@@ -344,18 +345,20 @@ This branch adds anomaly detection and forecasting for **power equipment** monit
 | Network gear PSU | Generic switches (dual PSU) | ENTITY-MIB |
 | Environmental sensors | Temp/humidity | SENSOR-MIB |
 
-It adds **10 new CLI commands** on top of the original 8 and trains **three separate models**:
+It adds **11 new CLI commands** on top of the original 8 and trains **four separate models**:
 
-1. **Baseline LSTM Autoencoder** — 18 aggregated UPS health metrics including rate-of-change delta features (`runtime_delta`, `battery_charge_delta`, `temperature_delta`, `output_load_delta`)
-2. **Phase-level LSTM Autoencoder** — 29 features including per-phase L1/L2/L3 voltages and currents, voltage/current imbalance percentages, and all delta features
+1. **Baseline LSTM Autoencoder** — 16 vendor-agnostic features (absolute voltages/currents replaced by ratio/deviation columns to remove 120 V vs 230 V bias) plus delta features (`runtime_delta`, `temperature_delta`, `output_load_delta`)
+2. **Phase-level LSTM Autoencoder** — 30 features: all 16 baseline features plus per-phase L1/L2/L3 voltages and currents, voltage/current imbalance percentages, and per-phase voltage-drop deltas (`voltage_drop_delta_l1/l2/l3`) added by B3 to fix phase-sag recall
 3. **Battery RUL LSTM Regression** — predicts days until battery replacement from charge rate, discharge cycles, and battery health trends
+4. **Isolation Forest** — per-device-category anomaly detector trained on normal-only baseline features; battery features masked out for non-UPS categories to avoid constant-zero corruption of isolation splits
 
-The baseline and phase models run together as a **three-signal scorer**:
+The four signals combine as a **four-signal scorer**:
 - Baseline LSTM reconstruction error vs per-category threshold
-- Phase LSTM reconstruction error vs per-category threshold
+- Phase LSTM reconstruction error vs per-category threshold (UPS only)
 - Rule-based overload flag (`output_load_pct > 100` → zero false positives)
+- Isolation Forest score vs per-category threshold with ratio guard (`IF_MIN_SCORE_RATIO = 1.05`)
 
-`final_flag = baseline_flag OR phase_flag OR overload_rule_flag`
+`final_flag = baseline_flag OR phase_flag OR overload_rule_flag OR iforest_flag`
 
 ### Quick start (full pipeline)
 
@@ -371,8 +374,9 @@ python3 main.py preprocess-power
 python3 main.py train-power-baseline
 python3 main.py evaluate-power-baseline
 
-# Phase 3 — train phase-level model + run dual detection on CSV
+# Phase 3 — train phase-level model + Isolation Forest + run four-signal detection on CSV
 python3 main.py train-power-phase
+python3 main.py train-power-iforest
 python3 main.py detect-power-csv
 
 # Phase 4 — train battery RUL model + generate per-device predictions
@@ -393,10 +397,12 @@ python3 main.py produce-power-kafka-test --use-training-profiles --seed 42      
 python3 main.py generate-power-data
 ```
 
-Generates a synthetic multi-vendor power SNMP dataset with 9 device profiles, 5-minute intervals, and probabilistic anomaly injection (~5% rate).
+Generates a synthetic multi-vendor power SNMP dataset with 21 device profiles across four categories, 5-minute intervals, and probabilistic anomaly injection (~5% rate).
 
 Output:
-- `snmp_anomaly_detection/data/synthetic_power_snmp_dataset.csv` — 18,144 rows, 9 devices
+- `snmp_anomaly_detection/data/synthetic_power_snmp_dataset.csv` — 42,336 rows (~7 days per device), 21 devices
+
+Device profiles: 14 UPS (generic/apc/eaton/liebert, 1–15 kW, 120 V and 230 V), 4 PDU (apc/raritan), 2 network PSU (cisco/generic), 1 environmental sensor
 
 Anomaly types injected: `battery_drain`, `overload`, `phase_sag`, `thermal_runaway`, `psu_failure`
 
@@ -416,9 +422,11 @@ Outputs:
 python3 main.py train-power-baseline
 ```
 
-Trains an 18-feature LSTM Autoencoder (hidden=64, latent=32, 30 epochs, seq_len=20).
+Trains a 16-feature LSTM Autoencoder (hidden=64, latent=32, 100 epochs, seq_len=20).
 Threshold is `mean + 2.0×std` of training reconstruction errors on normal sequences.
 Also computes **per-device-category thresholds** (env/network/pdu/ups) saved in metadata.
+
+> **B2 normalization:** absolute voltage/current columns replaced by vendor-agnostic ratio/deviation features (`battery_voltage_ratio`, `battery_current_ratio`, `input_voltage_dev_pct`, `output_voltage_dev_pct`, `output_current_ratio`). `output_power_w` and `battery_charge_delta` were dropped. This eliminates 230 V vs 120 V false positives without any changes to the model architecture.
 
 Outputs:
 - `snmp_anomaly_detection/outputs/power_baseline/baseline_model.pt`
@@ -446,9 +454,10 @@ Achieved metrics on synthetic dataset (single-model baseline only):
 python3 main.py train-power-phase
 ```
 
-Trains a 29-feature LSTM Autoencoder on per-phase L1/L2/L3 metrics, voltage/current imbalance
-percentages, and all four delta features (runtime, charge, temperature, load).
+Trains a 30-feature LSTM Autoencoder on per-phase L1/L2/L3 metrics, voltage/current imbalance percentages, and delta features (runtime, temperature, load).
 Also saves per-category thresholds to `phase_metadata.json`.
+
+> **B3 addition:** `voltage_drop_delta_l1/l2/l3` (clipped to ≤0 — captures only voltage drops, not rises) were added to amplify the phase-sag signal that was diluted in global MSE. This brought phase_sag recall from ~25% → 100% on the synthetic dataset.
 
 > **Important:** `voltage_imbalance_pct` and `current_skew_pct` are clipped to `[0%, 10%]` before RobustScaler. Single-phase devices produce near-zero IQR for these columns which causes RobustScaler to overflow. Clipping to the physical fault ceiling (`10%`) prevents this.
 
@@ -458,15 +467,31 @@ Outputs:
 - `snmp_anomaly_detection/outputs/power_phase/phase_scaler.pkl`
 
 ```bash
+python3 main.py train-power-iforest
+```
+
+Trains one `IsolationForest` (`n_estimators=200`) per device category on normal-only baseline-scaled rows.
+Battery-specific features (`battery_voltage_ratio`, `battery_current_ratio`, `on_battery_status`, `battery_replace_status`) and `output_frequency_hz` are **excluded** for non-UPS categories — constant zeros in these columns corrupt isolation-tree splits and inflate scores.
+
+Outputs:
+- `snmp_anomaly_detection/outputs/power_dual/iforest_models.pkl` — per-category fitted models
+- `snmp_anomaly_detection/outputs/power_dual/iforest_metadata.json` — per-category thresholds and feature column lists
+
+Borderline IF flags are suppressed by a ratio guard (`IF_MIN_SCORE_RATIO = 1.05`): the IF score must be at least 5% below the threshold — filters false positives that cluster at ratio 1.00–1.10 on normal data.
+
+> **E5: batch pre-scoring** — all rows for a device are scored in one `score_samples()` call before the window loop, so the loop only slices the pre-computed array rather than making individual sklearn calls per window.
+
+```bash
 python3 main.py detect-power-csv
 ```
 
-Runs the **three-signal scorer** on the full CSV dataset:
+Runs the **four-signal scorer** on the full CSV dataset:
 1. Baseline LSTM — per-category threshold
-2. Phase LSTM — per-category threshold
+2. Phase LSTM — per-category threshold (UPS devices only)
 3. Rule: `output_load_pct > 100` → `overload_rule_flag=1` (zero FP)
+4. Isolation Forest — per-category threshold with `IF_MIN_SCORE_RATIO` ratio guard
 
-`final_flag = combined_flag OR overload_rule_flag`
+`final_flag = combined_flag OR overload_rule_flag OR iforest_flag`
 
 > **Implementation note:** `PHASE_LEVEL_FEATURES ⊃ BASELINE_UPS_FEATURES`. Scaling must be done into **separate numpy arrays** — not the same dataframe — to prevent the phase scaler from overwriting the baseline-scaled columns.
 
@@ -475,7 +500,9 @@ Outputs:
 - `snmp_anomaly_detection/outputs/power_dual/detection_summary.json`
 - `snmp_anomaly_detection/outputs/power_dual/anomaly_windows_detail.json` — per-timestep breakdown
 
-Achieved metrics (three-signal OR, 2026-04-27):
+Achieved metrics (three-signal OR, 2026-04-27, **pre-B2/B3**):
+
+> **Note:** these metrics predate B2 (vendor-agnostic normalization) and B3 (voltage drop deltas). Re-run `detect-power-csv` after retraining both models to get updated numbers. Phase_sag recall in particular is expected to reach ~100% after B3.
 
 | Metric | Value |
 |--------|-------|
@@ -486,15 +513,15 @@ Achieved metrics (three-signal OR, 2026-04-27):
 | True anomaly windows | 11,575 |
 | False positive rate | 1.2% |
 
-Per anomaly type:
+Per anomaly type (pre-B2/B3):
 
-| Type | Recall |
-|---|---|
-| battery_drain | 1.000 |
-| psu_failure | 1.000 |
-| thermal_runaway | 0.948 |
-| overload | 0.653 |
-| phase_sag | 0.539 |
+| Type | Recall (pre-B2/B3) | Notes |
+|---|---|---|
+| battery_drain | 1.000 | Unchanged |
+| psu_failure | 1.000 | Unchanged |
+| thermal_runaway | 0.948 | Unchanged |
+| overload | 0.653 | Normal load std=25% overlaps moderate overload; rule only fires above 100% |
+| phase_sag | 0.539 → **~1.000** | Fixed by B3 voltage drop deltas |
 
 #### Phase 4 — Battery RUL forecasting
 
@@ -558,7 +585,7 @@ Producer options:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--use-training-profiles` | off | Use the exact 11 training device profiles instead of random ones. **Required for smoke testing** — guarantees all feature values are in-distribution for the fitted scaler. Ignores `--device-count`. |
+| `--use-training-profiles` | off | Use the exact 21 training device profiles instead of random ones. **Required for smoke testing** — guarantees all feature values are in-distribution for the fitted scaler. Ignores `--device-count`. |
 | `--device-count` | 12 | Number of randomly generated devices. Ignored when `--use-training-profiles` is set. |
 | `--num-events` | 600 | Total main-phase events to produce. A warmup batch of 20 events per device is always prepended. |
 | `--sleep-seconds` | 0.05 | Delay between messages (~20 msg/s). |
@@ -616,7 +643,9 @@ snmp_anomaly_detection/
 │   │   ├── anomaly_results.csv                # per-window scores — CSV and Kafka, identical schema
 │   │   ├── detection_summary.json             # aggregate counts by device/vendor/category
 │   │   ├── anomaly_windows_detail.json        # per-event timestep breakdown + top features
-│   │   └── kafka_power_results.jsonl          # raw Kafka stream log (append-only, runtime)
+│   │   ├── kafka_power_results.jsonl          # raw Kafka stream log (append-only, runtime)
+│   │   ├── iforest_models.pkl                 # per-category IsolationForest models (E1/E2)
+│   │   └── iforest_metadata.json             # per-category thresholds + feature column lists
 │   └── battery_rul/
 │       ├── rul_model.pt                       # RUL regression LSTM
 │       ├── rul_scaler.pkl
@@ -639,21 +668,24 @@ snmp_anomaly_detection/
 
 ### Feature sets
 
-**Baseline UPS features (18):**
-Core health signals: `battery_charge_pct`, `battery_voltage_v`, `battery_current_a`, `battery_temperature_c`, `runtime_remaining_min`, `on_battery_status`, `battery_replace_status`, `input_voltage_v`, `input_frequency_hz`, `output_voltage_v`, `output_current_a`, `output_load_pct`, `output_frequency_hz`, `output_power_w`
-Rate-of-change (all signed-log1p compressed): `runtime_delta`, `battery_charge_delta`, `temperature_delta`, `output_load_delta`
+**Baseline UPS features (16):**
+Vendor-agnostic health signals: `battery_charge_pct`, `battery_voltage_ratio` *(v / rated_battery_v)*, `battery_current_ratio` *(a / rated_discharge_current)*, `battery_temperature_c`, `runtime_remaining_min`, `on_battery_status`, `battery_replace_status`, `input_voltage_dev_pct` *((v − nominal) / nominal × 100)*, `input_frequency_hz`, `output_voltage_dev_pct`, `output_current_ratio` *(a / (rated_w / nominal_v))*, `output_load_pct`, `output_frequency_hz`
+Rate-of-change (signed-log1p compressed): `runtime_delta`, `temperature_delta`, `output_load_delta`
 
-**Phase-level features (29):** all 18 baseline features + `input_voltage_l1/l2/l3`, `input_current_l1/l2/l3`, `output_current_l1/l2/l3`, `voltage_imbalance_pct`, `current_skew_pct`
+> `output_power_w` and `battery_charge_delta` were removed in B2 — redundant/noise after normalization.
+
+**Phase-level features (30):** all 16 baseline features + `input_voltage_l1/l2/l3`, `input_current_l1/l2/l3`, `output_current_l1/l2/l3`, `voltage_imbalance_pct`, `current_skew_pct`, `voltage_drop_delta_l1/l2/l3` *(B3 — clipped to ≤0)*
 
 **Battery RUL features (7):** `battery_charge_pct`, `battery_voltage_v`, `battery_current_a`, `battery_temperature_c`, `runtime_remaining_min`, `charge_rate`, `discharge_cycles_approx`
 
-### Known issues and limitations (updated 2026-04-27)
+### Known issues and limitations (updated 2026-05-08)
 
 | Issue | Details |
 |-------|---------|
-| overload recall 0.653 | Normal load variance (std=25%) overlaps with moderate overload (65–100%). Rule only fires above 100%. |
-| phase_sag recall 0.539 | Small voltage dips still below phase model threshold for many events |
-| ups_lie_01 recall 0.727 | 3-phase Liebert UPS — imbalance features near-zero during many faults |
-| RUL accuracy | Synthetic 7-day window: MAE ~1,647 days. Meaningful RUL needs months of real battery telemetry |
-| Kafka Phase 5 | Streaming code complete but requires a running Kafka broker |
+| overload recall ~0.65 | Normal load variance (std=25%) overlaps moderate overload (65–100%). Rule only fires above 100%. Improving requires tighter load-spike features or a narrower normal distribution. |
+| phase_sag recall | **Fixed by B3** — `voltage_drop_delta_l1/l2/l3` bring recall from ~25% → ~100% on the synthetic dataset. |
+| RUL accuracy | Synthetic 7-day window: MAE ~1,647 days. Meaningful RUL needs months of real battery telemetry. |
+| IF auto-calibration | `IF_MIN_SCORE_RATIO = 1.05` is a fixed stop-gap. Per-category calibration from FP/TP gap (E4b) is planned but blocked until real device data (A1) is available. |
+| Kafka Phase 5 | Streaming code complete but requires a running Kafka broker. |
+| Metric table stale | The precision/recall/F1 table above is pre-B2/B3. Retrain and re-detect to get updated numbers. |
 

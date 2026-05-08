@@ -15,13 +15,14 @@ import json
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import Enum
 
 import joblib
 import numpy as np
-import pandas as pd
 
 from snmp_anomaly_detection.config import (
     BASELINE_UPS_FEATURES,
+    IF_MIN_SCORE_RATIO,
     PHASE_LEVEL_FEATURES,
     PowerInferenceConfig,
     ProjectPaths,
@@ -63,8 +64,13 @@ _VOLT_DROP_TARGETS: tuple[str, ...] = (
     "voltage_drop_delta_l3",
 )
 
-# Features excluded from attribution — confirmed zero ground-truth deviation
-_ATTRIBUTION_EXCLUDE: frozenset[str] = frozenset({"input_frequency_hz"})
+# Features excluded from attribution for ALL device categories.
+_ATTRIBUTION_EXCLUDE: frozenset[str] = frozenset({
+    "input_frequency_hz",
+    "output_frequency_hz",
+    "on_battery_status",       # transient binary flag — self-evident, not a diagnostic cause
+    "battery_replace_status",  # persistent firmware flag — RUL model covers this separately
+})
 
 # output_frequency_hz MSE is excluded for non-UPS categories (pdu/network/env).
 # For UPS it is the inverter output frequency — a real fault signal.
@@ -72,6 +78,21 @@ _ATTRIBUTION_EXCLUDE: frozenset[str] = frozenset({"input_frequency_hz"})
 _NON_UPS_MSE_EXCLUDE: frozenset[str] = frozenset({"output_frequency_hz"})
 
 _EPS = 1e-9
+
+
+class AlertState(str, Enum):
+    SUSPECTED = "suspected"  # IF fired, LSTM hasn't scored yet (cold-start early warning)
+    CONFIRMED = "confirmed"  # both IF and LSTM flagged
+    LSTM_ONLY = "lstm_only"  # LSTM flagged without IF, or normal window (no flag)
+    CLEARED   = "cleared"    # IF fired but LSTM did not confirm within n_confirmation_windows
+
+
+@dataclass
+class PendingAlert:
+    if_score: float
+    if_threshold: float
+    if_peak_timestep: str
+    lstm_windows_pending: int = 0  # LSTM windows scored since IF fired without LSTM confirmation
 
 
 @dataclass
@@ -135,7 +156,7 @@ class PowerScoringResult:
     # Combined flags — mirrors DualModelResult
     combined_flag: int
     overload_rule_flag: int   # output_load_pct > 100 in any window timestep
-    final_flag: int           # combined_flag OR overload_rule_flag
+    final_flag: int           # combined_flag OR overload_rule_flag OR iforest_flag
     alert_policy: str
     compound_alert: bool
     compound_alert_peer: str = ""
@@ -143,6 +164,12 @@ class PowerScoringResult:
     # Ground-truth fields — unavailable at inference time; kept for schema parity
     true_label: int = 0
     anomaly_types: list[str] = field(default_factory=list)
+    # IForest fields (E6: scored independently on every incoming row)
+    iforest_score: float = 0.0
+    iforest_threshold: float = 0.0
+    iforest_flag: int = 0
+    # E7: two-stage alert lifecycle
+    alert_state: AlertState = AlertState.LSTM_ONLY
 
 
 class PowerDeviceWindowManager:
@@ -200,6 +227,9 @@ class PowerStreamProcessor:
         self._device_stats: dict[str, dict[str, DeviceErrorStats]] = {}
         self._windows_since_save: int = 0
         self._load_device_stats()
+        # E7 — two-stage alert lifecycle
+        self._pending_alerts: dict[str, PendingAlert | None] = {}
+        self._n_confirmation_windows: int = self._config.n_confirmation_windows
 
     def _load_models(self) -> None:
         p = self._paths
@@ -215,6 +245,7 @@ class PowerStreamProcessor:
             torch.load(p.power_outputs_dir / "baseline_model.pt", map_location="cpu")
         )
         self._baseline_model.eval()
+        self._loss_fn = torch.nn.MSELoss(reduction="none")
         self._baseline_scaler = joblib.load(p.power_outputs_dir / "baseline_scaler.pkl")
         self._baseline_threshold: float = self._baseline_meta["threshold"]
         self._baseline_cat_thresholds: dict[str, float] = self._baseline_meta.get("per_category_thresholds", {})
@@ -237,6 +268,27 @@ class PowerStreamProcessor:
         self._phase_cat_thresholds: dict[str, float] = self._phase_meta.get("per_category_thresholds", {})
         self._phase_normal_errors: dict[str, float] = self._phase_meta.get("normal_feature_errors", {})
         self._phase_normal_stds: dict[str, float] = self._phase_meta.get("normal_feature_error_stds", {})
+
+        # E6: IForest loaded for immediate per-row scoring (decoupled from LSTM buffer)
+        self._iforest_models: dict = {}
+        self._iforest_thresholds: dict[str, float] = {}
+        self._iforest_feature_cols: dict[str, list[str]] = {}
+        if p.iforest_model_file.exists() and p.iforest_metadata_file.exists():
+            self._iforest_models = joblib.load(p.iforest_model_file)
+            with open(p.iforest_metadata_file) as f:
+                _if_meta = json.load(f)
+            self._iforest_thresholds = {cat: v["threshold"] for cat, v in _if_meta.items()}
+            self._iforest_feature_cols = {
+                cat: v.get("feature_cols", list(BASELINE_UPS_FEATURES))
+                for cat, v in _if_meta.items()
+            }
+        # Pre-compute per-category column index lists once so _score_iforest_row
+        # doesn't recompute them on every incoming message.
+        _b_col_list = list(BASELINE_UPS_FEATURES)
+        self._iforest_col_indices: dict[str, list[int]] = {
+            cat: [_b_col_list.index(c) for c in cols if c in _b_col_list]
+            for cat, cols in self._iforest_feature_cols.items()
+        }
 
     # ------------------------------------------------------------------
     # B1 — per-device online threshold helpers
@@ -349,6 +401,70 @@ class PowerStreamProcessor:
             json.dump(raw, f)
 
     # ------------------------------------------------------------------
+    # E6 — IForest helpers
+    # ------------------------------------------------------------------
+
+    def _score_iforest_row(
+        self, b_scaled: list[float], device_category: str
+    ) -> tuple[float, float, int]:
+        """Score a single scaled baseline row with IForest.
+
+        Returns (if_score, if_threshold, if_flag). Returns (0.0, 0.0, 0) when no
+        IF model is available for this category.
+        """
+        clf = self._iforest_models.get(device_category)
+        if clf is None:
+            return 0.0, 0.0, 0
+        _col_indices = self._iforest_col_indices.get(device_category, list(range(len(BASELINE_UPS_FEATURES))))
+        _vec = np.array([[b_scaled[j] for j in _col_indices]])
+        score = float(clf.score_samples(_vec)[0])
+        threshold = self._iforest_thresholds.get(device_category, -0.5)
+        score_ratio = (score / threshold) if threshold != 0 else 0.0
+        flag = int(score < threshold and score_ratio >= IF_MIN_SCORE_RATIO)
+        return score, threshold, flag
+
+    def _make_suspected_result(
+        self, event: PowerEvent, if_score: float, if_threshold: float, if_flag: int
+    ) -> PowerScoringResult:
+        """Minimal SUSPECTED result emitted when IF fires before the LSTM buffer is full."""
+        ts_str = str(event.timestamp)
+        true_labels = list(self._true_label_buffers[event.device_id])
+        anomaly_types = list(self._anomaly_type_buffers[event.device_id])
+        return PowerScoringResult(
+            device_id=event.device_id,
+            device_category=event.device_category,
+            vendor=event.vendor,
+            phase_count=event.phase_count,
+            window_start=ts_str,
+            window_end=event.timestamp,
+            window_timestamps=[ts_str],
+            baseline_anomaly=0,
+            baseline_error=0.0,
+            baseline_threshold=0.0,
+            baseline_peak_timestep="",
+            baseline_top_features="",
+            baseline_timestep_errors=[],
+            phase_anomaly=0,
+            phase_error=0.0,
+            phase_threshold=0.0,
+            phase_peak_timestep="",
+            phase_top_features="",
+            phase_timestep_errors=[],
+            combined_flag=0,
+            overload_rule_flag=0,
+            final_flag=1,
+            alert_policy=self._config.alert_policy,
+            compound_alert=False,
+            calibration_status="calibrating",
+            true_label=int(any(true_labels)),
+            anomaly_types=list({t for t in anomaly_types if t and t != "none"}),
+            iforest_score=round(if_score, 6),
+            iforest_threshold=round(if_threshold, 6),
+            iforest_flag=if_flag,
+            alert_state=AlertState.SUSPECTED,
+        )
+
+    # ------------------------------------------------------------------
 
     def _apply_preprocessing(self, event: PowerEvent) -> None:
         """Mirror the training transforms applied before scaling.
@@ -431,11 +547,10 @@ class PowerStreamProcessor:
         Returns mean_error, per-timestep errors, flag, peak timestep index,
         and top-3 features by z-score surprise — matching dual_model_scorer.py.
         """
-        loss_fn = torch.nn.MSELoss(reduction="none")
         tensor = torch.tensor(window[np.newaxis], dtype=torch.float32)
         with torch.no_grad():
             recon = model(tensor)
-            errors = loss_fn(recon, tensor).squeeze(0).cpu().numpy()  # (seq_len, n_feat)
+            errors = self._loss_fn(recon, tensor).squeeze(0).cpu().numpy()  # (seq_len, n_feat)
 
         if mse_exclude:
             active_cols = [j for j, f in enumerate(feature_names) if f not in mse_exclude]
@@ -457,7 +572,7 @@ class PowerStreamProcessor:
             0.0, None,
         )
         for j, f in enumerate(feature_names):
-            if f in _ATTRIBUTION_EXCLUDE:
+            if f in attribution_exclude:
                 surprise[j] = 0.0
 
         peak_idx = int(np.argmax(timestep_errors))
@@ -500,9 +615,13 @@ class PowerStreamProcessor:
             event.feature_values.get("output_load_pct", 0.0)
         )
 
-        # Scale baseline vector — use DataFrame to match column names the scaler was fitted with
-        b_raw = pd.DataFrame([event.get_baseline_vector()], columns=list(BASELINE_UPS_FEATURES))
+        # sklearn scalers are order-dependent, not name-dependent — numpy is fine here
+        b_raw = np.array([event.get_baseline_vector()])
         b_scaled = self._baseline_scaler.transform(b_raw)[0].tolist()
+
+        # E6: score IF on the current row immediately — no buffer needed
+        if_score, if_threshold, if_flag = self._score_iforest_row(b_scaled, event.device_category)
+
         b_window = self._baseline_windows.push(event.device_id, b_scaled)
 
         p_window = None
@@ -514,14 +633,20 @@ class PowerStreamProcessor:
                         min(max(event.feature_values[col], 0.0), _IMBALANCE_CLIP_MAX)
                         / _IMBALANCE_CLIP_MAX
                     )
-            p_raw = pd.DataFrame([event.get_phase_vector()], columns=list(PHASE_LEVEL_FEATURES))
+            p_raw = np.array([event.get_phase_vector()])
             p_scaled = self._phase_scaler.transform(p_raw)[0].tolist()
             p_window = self._phase_windows.push(event.device_id, p_scaled)
 
-        # Only score when both windows are ready (for UPS) or just baseline (other)
-        if b_window is None:
-            return None
-        if event.device_category == "ups" and p_window is None:
+        # Only score LSTM when windows are full; IF already fired above regardless
+        if b_window is None or (event.device_category == "ups" and p_window is None):
+            if if_flag:
+                # E7: store pending alert, emit SUSPECTED early warning
+                self._pending_alerts[event.device_id] = PendingAlert(
+                    if_score=if_score,
+                    if_threshold=if_threshold,
+                    if_peak_timestep=str(event.timestamp),
+                )
+                return self._make_suspected_result(event, if_score, if_threshold, if_flag)
             return None
 
         win_timestamps = list(self._ts_buffers[event.device_id])
@@ -584,8 +709,44 @@ class PowerStreamProcessor:
         combined = int(b_flag or p_flag) if policy == "or" else int(b_flag and p_flag)
 
         # Rule-based overload: output_load_pct > 100 is physically impossible during normal op
-        overload_rule = int(bool(win_load_pct) and max(win_load_pct) > 100.0)
-        final_flag = int(combined or overload_rule)
+        overload_rule = int(bool(win_load_pct) and max(win_load_pct) > self._config.overload_load_pct_threshold)
+
+        # E7: two-stage alert lifecycle state machine
+        lstm_flagged = bool(combined or overload_rule)
+        pending = self._pending_alerts.get(event.device_id)
+        if pending is not None:
+            # Pending SUSPECTED alert from cold-start — resolve it now
+            if lstm_flagged or if_flag:
+                # LSTM confirms (or IF fires again) → CONFIRMED
+                alert_state = AlertState.CONFIRMED
+                effective_if_flag = 1
+                self._pending_alerts[event.device_id] = None
+            else:
+                pending.lstm_windows_pending += 1
+                if pending.lstm_windows_pending >= self._n_confirmation_windows:
+                    # Timeout — auto-clear the pending SUSPECTED alert
+                    alert_state = AlertState.CLEARED
+                    effective_if_flag = 0
+                    self._pending_alerts[event.device_id] = None
+                else:
+                    # Still within confirmation window — keep SUSPECTED
+                    alert_state = AlertState.SUSPECTED
+                    effective_if_flag = 1  # pending IF still active
+        else:
+            effective_if_flag = if_flag
+            if if_flag and lstm_flagged:
+                alert_state = AlertState.CONFIRMED
+            elif lstm_flagged:
+                alert_state = AlertState.LSTM_ONLY
+            elif if_flag:
+                # IF fired in steady state but LSTM didn't confirm → immediate CLEARED
+                alert_state = AlertState.CLEARED
+                effective_if_flag = 0
+            else:
+                alert_state = AlertState.LSTM_ONLY  # normal window, no flag
+
+        # CLEARED is a retraction — suppress the IF contribution from final_flag
+        final_flag = int(combined or overload_rule or effective_if_flag)
 
         # Compound alert tracking
         compound, peer = False, ""
@@ -633,4 +794,8 @@ class PowerStreamProcessor:
             calibration_status=cal_status,
             true_label=win_true_label,
             anomaly_types=win_anomaly_types,
+            iforest_score=round(if_score, 6),
+            iforest_threshold=round(if_threshold, 6),
+            iforest_flag=effective_if_flag,
+            alert_state=alert_state,
         )

@@ -27,7 +27,9 @@ import random
 import time
 from datetime import datetime, timezone
 
-from snmp_anomaly_detection.config import KafkaConfig, PowerTrainingConfig
+import pandas as pd
+
+from snmp_anomaly_detection.config import KafkaConfig, PowerTrainingConfig, ProjectPaths
 from snmp_anomaly_detection.data.dataset_builder import (
     PowerDatasetConfig,
     PowerDeviceProfile,
@@ -142,6 +144,34 @@ def _interleave_by_poll_cycle(df) -> list[dict]:
     return df.sort_values(["timestamp", "device_id"]).to_dict("records")
 
 
+def _load_events_from_csv(
+    num_events: int,
+    paths: ProjectPaths | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Load warmup + main rows from the existing training CSV.
+
+    Streams the exact rows the LSTM was trained on, guaranteeing in-distribution
+    reconstruction errors and eliminating false positives caused by re-generation
+    with a different random seed.
+
+    First _WARMUP_SEQ_LEN rows per device become warmup (fills buffer cleanly).
+    Remaining rows become main data, capped at num_events total.
+    """
+    paths = paths or ProjectPaths()
+    df = pd.read_csv(paths.power_dataset_file)
+    df = df.sort_values(["timestamp", "device_id"]).reset_index(drop=True)
+    df["_rank"] = df.groupby("device_id").cumcount()
+
+    warmup_df = df[df["_rank"] < _WARMUP_SEQ_LEN].drop(columns=["_rank"])
+    main_df = df[df["_rank"] >= _WARMUP_SEQ_LEN].drop(columns=["_rank"])
+
+    warmup_rows = warmup_df.sort_values(["timestamp", "device_id"]).to_dict("records")
+    main_rows = (
+        main_df.sort_values(["timestamp", "device_id"]).to_dict("records")[:num_events]
+    )
+    return warmup_rows, main_rows
+
+
 def _build_message(row: dict, is_warmup: bool, first_for_device: bool) -> dict:
     """Convert a dataset row into a Kafka message payload."""
     message = {k: v for k, v in row.items() if k not in ("anomaly", "anomaly_type")}
@@ -166,52 +196,53 @@ def produce_power_test_events(
     seed: int | None = None,
     kafka_config: KafkaConfig | None = None,
     use_training_profiles: bool = False,
+    from_csv: bool = False,
 ) -> None:
     _require_kafka()
     kafka_config = kafka_config or KafkaConfig()
-    rng = random.Random(seed)
 
-    if use_training_profiles:
-        profiles = list(_DEFAULT_POWER_PROFILES)
-        print(f"Using {len(profiles)} training profiles (in-distribution, guaranteed no OOD FPs):")
+    if from_csv:
+        # Stream the exact training CSV rows — eliminates FPs from re-generation noise.
+        print("Loading events from training CSV (guaranteed in-distribution)...")
+        warmup_rows, main_rows = _load_events_from_csv(num_events)
+        device_ids = sorted({r["device_id"] for r in warmup_rows + main_rows})
+        print(f"  {len(device_ids)} devices  {len(warmup_rows)} warmup + {len(main_rows)} main rows from CSV")
     else:
-        profiles = _random_profiles(device_count, rng)
-        print(f"Generated {len(profiles)} random device profiles:")
-    for p in profiles:
-        phase_label = f"{p.phase_count}-phase"
-        batt = f"  batt={p.battery_ah}Ah  age={p.install_age_days:.0f}d" if p.battery_ah else ""
-        print(f"  {p.device_id:28s}  {p.device_category:8s}  {p.vendor:8s}  {phase_label}  {p.rated_capacity_w:.0f}W{batt}")
+        rng = random.Random(seed)
+        if use_training_profiles:
+            profiles = list(_DEFAULT_POWER_PROFILES)
+            print(f"Using {len(profiles)} training profiles (in-distribution, guaranteed no OOD FPs):")
+        else:
+            profiles = _random_profiles(device_count, rng)
+            print(f"Generated {len(profiles)} random device profiles:")
+        for p in profiles:
+            phase_label = f"{p.phase_count}-phase"
+            batt = f"  batt={p.battery_ah}Ah  age={p.install_age_days:.0f}d" if p.battery_ah else ""
+            print(f"  {p.device_id:28s}  {p.device_category:8s}  {p.vendor:8s}  {phase_label}  {p.rated_capacity_w:.0f}W{batt}")
 
-    # --- Warmup: guaranteed-normal events so per-device buffers fill cleanly ---
-    # seq_len warmup events per device means:
-    #   - No anomaly data is present while the rolling buffer is filling.
-    #   - Per-device delta state (_prev_raw) is stable before scoring starts.
-    #   - The _device_reset signal on the first warmup event clears stale state
-    #     from any previous producer run.
-    warmup_config = PowerDatasetConfig(
-        total_points=_WARMUP_SEQ_LEN + 5,  # +5 ensures head(seq_len) is always satisfiable
-        anomaly_probability=0.0,
-    )
-    warmup_df = build_power_dataset(warmup_config, profiles=profiles)
-    warmup_rows = (
-        warmup_df
-        .sort_values(["timestamp", "device_id"])
-        .groupby("device_id", sort=False)
-        .head(_WARMUP_SEQ_LEN)
-        .sort_values(["timestamp", "device_id"])
-        .to_dict("records")
-    )
+        # --- Warmup: guaranteed-normal events so per-device buffers fill cleanly ---
+        warmup_config = PowerDatasetConfig(
+            total_points=_WARMUP_SEQ_LEN + 5,  # +5 ensures head(seq_len) is always satisfiable
+            anomaly_probability=0.0,
+        )
+        warmup_df = build_power_dataset(warmup_config, profiles=profiles)
+        warmup_rows = (
+            warmup_df
+            .sort_values(["timestamp", "device_id"])
+            .groupby("device_id", sort=False)
+            .head(_WARMUP_SEQ_LEN)
+            .sort_values(["timestamp", "device_id"])
+            .to_dict("records")
+        )
 
-    # --- Main dataset with anomaly injection, interleaved by poll cycle ---
-    # total_points raised to _MIN_POINTS_PER_DEVICE so the circadian pattern
-    # has room to fully express before the pool runs dry.
-    total_points = max(num_events // max(len(profiles), 1), _MIN_POINTS_PER_DEVICE)
-    dataset_config = PowerDatasetConfig(
-        total_points=total_points,
-        anomaly_probability=anomaly_probability,
-    )
-    main_df = build_power_dataset(dataset_config, profiles=profiles)
-    main_rows = _interleave_by_poll_cycle(main_df)[:num_events]
+        # --- Main dataset with anomaly injection, interleaved by poll cycle ---
+        total_points = max(num_events // max(len(profiles), 1), _MIN_POINTS_PER_DEVICE)
+        dataset_config = PowerDatasetConfig(
+            total_points=total_points,
+            anomaly_probability=anomaly_probability,
+        )
+        main_df = build_power_dataset(dataset_config, profiles=profiles)
+        main_rows = _interleave_by_poll_cycle(main_df)[:num_events]
 
     expected_anomalies = sum(1 for r in main_rows if r.get("anomaly", 0))
     total_to_send = len(warmup_rows) + len(main_rows)
@@ -301,6 +332,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Ignores --device-count when set."
         ),
     )
+    parser.add_argument(
+        "--from-csv",
+        action="store_true",
+        default=False,
+        help=(
+            "Stream rows directly from the existing synthetic_power_snmp_dataset.csv "
+            "instead of regenerating. Eliminates false positives caused by re-generation "
+            "with a different random seed. Use this for accurate Kafka end-to-end testing. "
+            "Ignores --device-count, --anomaly-probability, --seed, and --use-training-profiles."
+        ),
+    )
     return parser
 
 
@@ -313,6 +355,7 @@ def main() -> None:
         anomaly_probability=args.anomaly_probability,
         seed=args.seed,
         use_training_profiles=args.use_training_profiles,
+        from_csv=args.from_csv,
     )
 
 

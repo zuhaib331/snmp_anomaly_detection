@@ -11,6 +11,7 @@ from snmp_anomaly_detection.config import KafkaConfig, PowerInferenceConfig, Pro
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, PHASE_LEVEL_FEATURES
 from snmp_anomaly_detection.inference.dual_model_scorer import DualModelResult, save_dual_results
 from snmp_anomaly_detection.inference.power_stream_processor import (
+    AlertState,
     PowerEvent,
     PowerScoringResult,
     PowerStreamProcessor,
@@ -28,6 +29,17 @@ POWER_REQUIRED_FIELDS: tuple[str, ...] = (
     "device_id",
     "device_category",
     "vendor",
+)
+
+# Raw source columns needed by _apply_preprocessing for B2 normalization.
+# Not in BASELINE_UPS_FEATURES / PHASE_LEVEL_FEATURES (those hold the post-normalization names),
+# but these must be in feature_values so PowerStreamProcessor can compute the ratios correctly.
+_B2_RAW_COLS: tuple[str, ...] = (
+    "input_voltage_v",
+    "output_voltage_v",
+    "output_current_a",
+    "battery_voltage_v",
+    "battery_current_a",
 )
 
 
@@ -51,7 +63,7 @@ def _parse_power_event(payload: dict) -> PowerEvent | None:
         return None
 
     feature_values: dict[str, float] = {}
-    all_feature_cols = set(BASELINE_UPS_FEATURES) | set(PHASE_LEVEL_FEATURES)
+    all_feature_cols = set(BASELINE_UPS_FEATURES) | set(PHASE_LEVEL_FEATURES) | set(_B2_RAW_COLS)
     for col in all_feature_cols:
         try:
             feature_values[col] = float(payload.get(col, 0.0))
@@ -65,6 +77,9 @@ def _parse_power_event(payload: dict) -> PowerEvent | None:
         vendor=str(payload.get("vendor", "generic")),
         feature_values=feature_values,
         phase_count=int(payload.get("phase_count", 1)),
+        rated_capacity_w=float(payload.get("rated_capacity_w", 0.0)),
+        nominal_voltage_v=float(payload.get("nominal_voltage_v", 120.0)),
+        rated_battery_v=float(payload.get("rated_battery_v", 0.0)),
         session_reset=bool(payload.get("_device_reset", False)),
         true_label=int(payload.get("expected_label", 0)),
         anomaly_type=str(payload.get("expected_anomaly_type", "none")),
@@ -99,6 +114,9 @@ def _to_dual_result(r: PowerScoringResult) -> DualModelResult:
         phase_timestep_errors=r.phase_timestep_errors,
         phase_peak_timestep=r.phase_peak_timestep,
         phase_top_features=r.phase_top_features,
+        iforest_score=r.iforest_score,
+        iforest_threshold=r.iforest_threshold,
+        iforest_flag=r.iforest_flag,
     )
 
 
@@ -143,21 +161,44 @@ def run_power_kafka_detection(
                         if result is None:
                             continue
 
-                        dual = _to_dual_result(result)
-                        accumulated_dual.append(dual)
-
                         row = asdict(result)
                         row["window_end"] = str(row["window_end"])
                         out_f.write(json.dumps(row) + "\n")
-                        out_f.flush()
 
-                        # Update all report files after every scored window
-                        save_dual_results(accumulated_dual, paths, silent=True)
+                        # E7: route by alert_state lifecycle
+                        if result.alert_state == AlertState.SUSPECTED:
+                            print(
+                                f"SUSPECTED [IF] [{result.device_category}] "
+                                f"{result.device_id} @ {result.window_start} "
+                                f"if_score={result.iforest_score:.4f} < thresh={result.iforest_threshold:.4f}"
+                            )
+                            continue  # provisional — skip accumulation until confirmed
 
-                        if result.final_flag:
+                        if result.alert_state == AlertState.CLEARED:
+                            print(
+                                f"CLEARED [{result.device_category}] "
+                                f"{result.device_id} @ {result.window_start} "
+                                f"(IF retracted — LSTM did not confirm)"
+                            )
+                            # Accumulate CLEARED as FP feedback but don't print as anomaly below
+
+                        dual = _to_dual_result(result)
+                        accumulated_dual.append(dual)
+
+                        # Flush JSONL every 50 writes rather than every message
+                        if len(accumulated_dual) % 50 == 0:
+                            out_f.flush()
+
+                        # Report files are aggregate — regenerating after every window is O(N²).
+                        # Write every 100 scored windows; final save happens at shutdown.
+                        if len(accumulated_dual) % 100 == 0:
+                            save_dual_results(accumulated_dual, paths, silent=True)
+
+                        if result.final_flag and result.alert_state != AlertState.CLEARED:
+                            state_label = result.alert_state.value.upper()
                             prefix = "COMPOUND " if result.compound_alert else ""
                             print(
-                                f"{prefix}ANOMALY [{result.device_category}] "
+                                f"{prefix}{state_label} [{result.device_category}] "
                                 f"{result.device_id} "
                                 f"{result.window_start} → {result.window_end} "
                                 f"baseline={result.baseline_anomaly} "
@@ -169,6 +210,9 @@ def run_power_kafka_detection(
                                     + (f", top=[{result.phase_top_features}]" if result.phase_top_features else "")
                                     + ")"
                                     if result.phase_anomaly else ""
+                                )
+                                + (f" if={result.iforest_flag}"
+                                    + (f" (score={result.iforest_score:.4f})" if result.iforest_flag else "")
                                 )
                                 + (f"  peer={result.compound_alert_peer}" if result.compound_alert else "")
                             )

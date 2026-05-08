@@ -484,8 +484,12 @@ def _build_power_row(
 def build_power_dataset(
     config: PowerDatasetConfig | None = None,
     profiles: list[PowerDeviceProfile] | None = None,
+    seed: int | None = None,
 ) -> pd.DataFrame:
     """Generate a synthetic multi-vendor power SNMP dataset."""
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
     config = config or PowerDatasetConfig()
     profiles = profiles or _DEFAULT_POWER_PROFILES
 

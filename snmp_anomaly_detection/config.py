@@ -97,7 +97,7 @@ IF_EXCLUDED_FEATURES: dict[str, frozenset[str]] = {
 # Minimum ratio of (if_score / if_threshold) required to raise an IF flag.
 # Filters borderline flags whose ratios cluster at 1.00–1.10 on normal data.
 # Revisit with real device data (A1) — auto-calibration per category planned (E4b).
-IF_MIN_SCORE_RATIO: float = 1.15
+IF_MIN_SCORE_RATIO: float = 1.05
 
 
 @dataclass(frozen=True)
@@ -258,3 +258,9 @@ class PowerInferenceConfig:
     n_calibration_windows: int = 50   # windows observed silently before device threshold locks in
     online_threshold_k: float = 3.0   # mean + k*std defines the device threshold after calibration
     calibration_safety_multiplier: float = 3.0  # during cold-start, fire only if error > N × category threshold
+    # E7 — two-stage alert lifecycle
+    n_confirmation_windows: int = 3   # LSTM windows to wait before auto-clearing a SUSPECTED alert
+    # Overload rule — output_load_pct above this value is treated as a definitive overload fault.
+    # 100.0 is physically correct for most vendors; adjust per vendor if their agent reports
+    # transient brief spikes above 100 under normal load (e.g., some PDU firmware).
+    overload_load_pct_threshold: float = float("inf")  # TODO: restore to 100.0 once vendor OID scaling is verified

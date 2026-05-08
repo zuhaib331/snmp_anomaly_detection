@@ -58,8 +58,6 @@ class DualModelResult:
     overload_rule_flag: int     # rule: output_load_pct > 100 in any window timestep
     final_flag: int             # combined_flag OR overload_rule_flag
     alert_policy: str
-    true_label: int = 0
-    anomaly_types: list[str] = field(default_factory=list)
     # Per-sequence diagnostics
     window_timestamps: list[str] = field(default_factory=list)
     baseline_timestep_errors: list[float] = field(default_factory=list)
@@ -91,8 +89,13 @@ def _load_model(model_path: Path, meta: dict) -> "LSTMAutoencoder":
     return model
 
 
-# Features excluded from attribution — confirmed zero ground-truth deviation
-_ATTRIBUTION_EXCLUDE: frozenset[str] = frozenset({"input_frequency_hz"})
+# Features excluded from attribution for ALL device categories.
+_ATTRIBUTION_EXCLUDE: frozenset[str] = frozenset({
+    "input_frequency_hz",
+    "output_frequency_hz",
+    "on_battery_status",       # transient binary flag — self-evident, not a diagnostic cause
+    "battery_replace_status",  # persistent firmware flag — RUL model covers this separately
+})
 
 # output_frequency_hz is the UPS inverter output frequency — a real fault signal for UPS.
 # For PDU/network/env it is ambient line frequency (grid noise), not a device health indicator.
@@ -137,7 +140,6 @@ def _score_window_detailed(
         0.0, None,
     )
 
-    # Fix 1: zero out known-noise features so they never rank as top cause
     for j, f in enumerate(feature_names):
         if f in _ATTRIBUTION_EXCLUDE:
             surprise[j] = 0.0
@@ -237,8 +239,6 @@ def run_dual_detection(
         phase_vals = phase_scaler.transform(phase_df[phase_cols])
 
         timestamps = device_df["timestamp"].astype(str).values
-        labels = device_df["anomaly"].values
-        anomaly_types = device_df.get("anomaly_type", pd.Series(["none"] * len(device_df))).values
         # Raw output_load_pct (unscaled) — used for rule-based overload detection.
         # Normal operation: output_load_pct ≤ 100.  Any reading > 100 is definitively overload.
         raw_load_pct = device_df["output_load_pct"].values if "output_load_pct" in device_df.columns else None
@@ -315,13 +315,10 @@ def run_dual_detection(
             overload_rule = 0
             if raw_load_pct is not None:
                 win_load = raw_load_pct[i : i + seq_len]
-                if win_load.max() > 100.0:
+                if win_load.max() > inference_config.overload_load_pct_threshold:
                     overload_rule = 1
 
             final = int(combined or overload_rule or if_flag)
-
-            true_label = int(labels[i : i + seq_len].max())
-            seen_types = list({t for t in anomaly_types[i : i + seq_len] if t != "none"})
 
             b_peak_idx = b_detail["peak_timestep_idx"]
             p_peak_idx = p_detail["peak_timestep_idx"]
@@ -343,8 +340,6 @@ def run_dual_detection(
                 overload_rule_flag=overload_rule,
                 final_flag=final,
                 alert_policy=policy,
-                true_label=true_label,
-                anomaly_types=seen_types,
                 window_timestamps=win_timestamps,
                 baseline_timestep_errors=b_detail["timestep_errors"],
                 baseline_peak_timestep=win_timestamps[b_peak_idx],
@@ -412,8 +407,10 @@ def _severity(max_ratio: float) -> str:
     return "medium"
 
 
+
 def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, silent: bool = False) -> None:
     paths.ensure_power_directories()
+
     rows = [asdict(r) for r in results]
     df = pd.DataFrame(rows)
     csv_path = paths.power_dual_outputs_dir / "anomaly_results.csv"
@@ -432,7 +429,6 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
             "flagged_phase": 0,
             "flagged_combined": 0,
             "flagged_iforest": 0,
-            "true_anomaly_windows": 0,
         })
         entry["total_windows"] += 1
         entry["flagged_baseline"] += r.baseline_anomaly
@@ -441,7 +437,6 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
         entry["flagged_combined"] += r.combined_flag
         entry["flagged_iforest"] += r.iforest_flag
         entry["flagged_final"] = entry.get("flagged_final", 0) + r.final_flag
-        entry["true_anomaly_windows"] += r.true_label
 
     # --- Per-vendor breakdown ---
     by_vendor: dict = {}
@@ -450,11 +445,9 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
             "vendor": r.vendor,
             "total_windows": 0,
             "flagged_final": 0,
-            "true_anomaly_windows": 0,
         })
         entry["total_windows"] += 1
         entry["flagged_final"] += r.final_flag
-        entry["true_anomaly_windows"] += r.true_label
 
     # --- Per-category breakdown ---
     by_category: dict = {}
@@ -464,12 +457,10 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
             "total_windows": 0,
             "flagged_iforest": 0,
             "flagged_final": 0,
-            "true_anomaly_windows": 0,
         })
         entry["total_windows"] += 1
         entry["flagged_iforest"] += r.iforest_flag
         entry["flagged_final"] += r.final_flag
-        entry["true_anomaly_windows"] += r.true_label
 
     flagged = [r for r in results if r.final_flag == 1]
     events = _collapse_to_events(flagged)
@@ -483,9 +474,7 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
         "flagged_by_iforest": sum(r.iforest_flag for r in results),
         "flagged_combined": sum(r.combined_flag for r in results),
         "flagged_final": sum(r.final_flag for r in results),
-        "true_anomaly_windows": sum(r.true_label for r in results),
         "total_anomaly_events": len(events),
-        "true_anomaly_events": sum(r.true_label for r in events),
         "by_device": list(by_device.values()),
         "by_vendor": list(by_vendor.values()),
         "by_category": list(by_category.values()),
@@ -501,15 +490,11 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
             for p in json.load(f):
                 rul_map[p["device_id"]] = p
 
-    # --- Flagged event detail JSON (one entry per real anomaly event, duplicates collapsed) ---
+    # --- Flagged window detail JSON (one entry per flagged window, no collapsing) ---
     detail_rows = []
-    for event_number, r in enumerate(events, start=1):
-        duration_minutes = int(
-            (pd.Timestamp(r.window_end) - pd.Timestamp(r.window_start)).total_seconds() / 60
-        )
+    for window_number, r in enumerate(flagged, start=1):
         b_ratio = round(r.baseline_error / r.baseline_threshold, 2) if r.baseline_threshold else 0.0
         p_ratio = round(r.phase_error / r.phase_threshold, 2) if r.phase_threshold else 0.0
-        ground_truth_type = r.anomaly_types[0] if r.anomaly_types else None
 
         rul_entry = None
         if r.device_category == "ups" and r.device_id in rul_map:
@@ -522,48 +507,49 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
                 "as_of": p["timestamp"],
             }
 
+        _total_ts = len(r.window_timestamps)
+        b_breach_ts = [
+            ts for ts, err in zip(r.window_timestamps, r.baseline_timestep_errors)
+            if err > r.baseline_threshold
+        ]
+        p_breach_ts = [
+            ts for ts, err in zip(r.window_timestamps, r.phase_timestep_errors)
+            if err > r.phase_threshold
+        ]
+
         detail_rows.append({
-            "event_number": event_number,
+            "window_number": window_number,
             "device_id": r.device_id,
             "device_category": r.device_category,
             "vendor": r.vendor,
             "window_start": r.window_start,
             "window_end": r.window_end,
-            "duration_minutes": duration_minutes,
-            "triggered": bool(r.final_flag),
             "triggered_by": _triggered_by(r),
             "alert_policy": r.alert_policy,
             "severity": _severity(max(b_ratio, p_ratio)),
-            "ground_truth_type": ground_truth_type,
-            "true_positive": bool(r.final_flag) and ground_truth_type is not None,
             "baseline": {
                 "error": r.baseline_error,
                 "threshold": r.baseline_threshold,
-                "error_ratio": b_ratio,
+                "sequence_accuracy_pct": round((_total_ts - len(b_breach_ts)) / _total_ts * 100, 1) if _total_ts else 0.0,
                 "flagged": bool(r.baseline_anomaly),
                 "peak_timestep": r.baseline_peak_timestep,
                 "top_features": r.baseline_top_features,
-                "breach_timesteps": [
-                    ts for ts, err in zip(r.window_timestamps, r.baseline_timestep_errors)
-                    if err > r.baseline_threshold
-                ],
+                "breach_timesteps": b_breach_ts,
             },
             "phase": {
                 "error": r.phase_error,
                 "threshold": r.phase_threshold,
-                "error_ratio": p_ratio,
+                "sequence_accuracy_pct": round((_total_ts - len(p_breach_ts)) / _total_ts * 100, 1) if _total_ts else 0.0,
                 "flagged": bool(r.phase_anomaly),
                 "peak_timestep": r.phase_peak_timestep,
                 "top_features": r.phase_top_features,
-                "breach_timesteps": [
-                    ts for ts, err in zip(r.window_timestamps, r.phase_timestep_errors)
-                    if err > r.phase_threshold
-                ],
+                "breach_timesteps": p_breach_ts,
             },
             "iforest": {
                 "score": r.iforest_score,
                 "threshold": r.iforest_threshold,
                 "score_ratio": round(r.iforest_score / r.iforest_threshold, 2) if r.iforest_threshold else 0.0,
+                "health_pct": round(max(0.0, (1 - abs(r.iforest_score / r.iforest_threshold))) * 100, 1) if r.iforest_threshold else 0.0,
                 "flagged": bool(r.iforest_flag),
                 "peak_timestep": r.iforest_peak_timestep,
                 "top_features": r.iforest_top_features,
@@ -576,19 +562,19 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
 
     if not silent:
         print(f"Results:        {csv_path}")
-        print(f"Event detail:   {detail_path}")
+        print(f"Window detail:  {detail_path}")
         print(f"Windows flagged (LSTM):    {summary['flagged_combined']} / {summary['total_windows']}")
         print(f"Windows flagged (rule):    {summary['flagged_by_overload_rule']} / {summary['total_windows']}")
         print(f"Windows flagged (final):   {summary['flagged_final']} / {summary['total_windows']}")
-        print(f"Anomaly events (deduped):  {summary['total_anomaly_events']}  (true={summary['true_anomaly_events']})")
+        print(f"Anomaly events (deduped):  {summary['total_anomaly_events']}")
         print("\nFlagged by device:")
         for d in summary["by_device"]:
             print(f"  {d['device_id']:15s} [{d['device_category']:7s} / {d['vendor']:8s}]  flagged={d.get('flagged_final',0):4d} / {d['total_windows']}")
 
-        if events:
-            print(f"\nSample anomaly events (first 5 of {len(events)}):")
-            for r in events[:5]:
-                print(f"\n  [{r.device_id}] {r.window_start} → {r.window_end}  types={r.anomaly_types}")
+        if flagged:
+            print(f"\nSample flagged windows (first 5 of {len(flagged)}):")
+            for r in flagged[:5]:
+                print(f"\n  [{r.device_id}] {r.window_start} → {r.window_end}")
                 if r.baseline_anomaly:
                     print(f"    baseline: error={r.baseline_error:.6f} > thresh={r.baseline_threshold:.6f}")
                     print(f"             peak_at={r.baseline_peak_timestep}  top_features={r.baseline_top_features}")
