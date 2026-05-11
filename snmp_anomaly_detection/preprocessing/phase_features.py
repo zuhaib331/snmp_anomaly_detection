@@ -22,13 +22,24 @@ from snmp_anomaly_detection.preprocessing.power_features import (
     filter_normal_rows,
     create_sequences,
 )
+from snmp_anomaly_detection.preprocessing.scalar_transforms import (
+    PHASE_V_COLS,
+    PHASE_I_COLS,
+    IMBALANCE_CLIP_MAX,
+    IMBALANCE_COLS,
+)
+
+# Backward-compatible private aliases — existing importers (dual_model_scorer,
+# power_stream_processor) use these names and must not need changes until F13.
+_IMBALANCE_CLIP_MAX = IMBALANCE_CLIP_MAX
+_IMBALANCE_COLS     = IMBALANCE_COLS
 
 
 def compute_voltage_imbalance_pct(
     df: pd.DataFrame,
-    l1_col: str = "input_voltage_l1",
-    l2_col: str = "input_voltage_l2",
-    l3_col: str = "input_voltage_l3",
+    l1_col: str = PHASE_V_COLS[0],
+    l2_col: str = PHASE_V_COLS[1],
+    l3_col: str = PHASE_V_COLS[2],
 ) -> pd.Series:
     """NEMA MG-1 voltage imbalance: max deviation from average / average * 100."""
     avg = df[[l1_col, l2_col, l3_col]].mean(axis=1)
@@ -38,9 +49,9 @@ def compute_voltage_imbalance_pct(
 
 def compute_current_skew_pct(
     df: pd.DataFrame,
-    l1_col: str = "input_current_l1",
-    l2_col: str = "input_current_l2",
-    l3_col: str = "input_current_l3",
+    l1_col: str = PHASE_I_COLS[0],
+    l2_col: str = PHASE_I_COLS[1],
+    l3_col: str = PHASE_I_COLS[2],
 ) -> pd.Series:
     """Current skew: same formula as voltage imbalance applied to currents."""
     avg = df[[l1_col, l2_col, l3_col]].mean(axis=1)
@@ -49,21 +60,17 @@ def compute_current_skew_pct(
 
 
 def enrich_imbalance_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Recompute voltage_imbalance_pct and current_skew_pct from raw phase columns."""
-    phase_v_cols = ["input_voltage_l1", "input_voltage_l2", "input_voltage_l3"]
-    phase_i_cols = ["input_current_l1", "input_current_l2", "input_current_l3"]
+    """Recompute voltage_imbalance_pct and current_skew_pct from raw phase columns.
+
+    Uses PHASE_V_COLS / PHASE_I_COLS from scalar_transforms so the column names
+    are defined in exactly one place.
+    """
     df = df.copy()
-    if all(c in df.columns for c in phase_v_cols):
+    if all(c in df.columns for c in PHASE_V_COLS):
         df["voltage_imbalance_pct"] = compute_voltage_imbalance_pct(df)
-    if all(c in df.columns for c in phase_i_cols):
+    if all(c in df.columns for c in PHASE_I_COLS):
         df["current_skew_pct"] = compute_current_skew_pct(df)
     return df
-
-
-# Physical max for imbalance features — >5% is already abnormal; >10% is fault level.
-# Clipping prevents near-zero IQR from destroying RobustScaler for these columns.
-_IMBALANCE_CLIP_MAX: float = 10.0
-_IMBALANCE_COLS: tuple[str, ...] = ("voltage_imbalance_pct", "current_skew_pct")
 
 
 def scale_phase_features(

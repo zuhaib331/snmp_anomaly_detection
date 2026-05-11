@@ -3,18 +3,18 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import datetime
 
 import pandas as pd
 
 from snmp_anomaly_detection.config import KafkaConfig, PowerInferenceConfig, ProjectPaths
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, PHASE_LEVEL_FEATURES
-from snmp_anomaly_detection.inference.dual_model_scorer import DualModelResult, save_dual_results
+from snmp_anomaly_detection.inference.model_scorer import DualModelResult, save_dual_results
+from snmp_anomaly_detection.inference.events import PowerEvent
 from snmp_anomaly_detection.inference.power_stream_processor import (
     AlertState,
-    PowerEvent,
     PowerScoringResult,
     PowerStreamProcessor,
+    to_dual_result,
 )
 
 try:
@@ -31,9 +31,9 @@ POWER_REQUIRED_FIELDS: tuple[str, ...] = (
     "vendor",
 )
 
-# Raw source columns needed by _apply_preprocessing for B2 normalization.
+# Raw source columns needed by EventPreprocessor for B2 normalization.
 # Not in BASELINE_UPS_FEATURES / PHASE_LEVEL_FEATURES (those hold the post-normalization names),
-# but these must be in feature_values so PowerStreamProcessor can compute the ratios correctly.
+# but these must be in feature_values so normalize_absolute() can compute the ratios.
 _B2_RAW_COLS: tuple[str, ...] = (
     "input_voltage_v",
     "output_voltage_v",
@@ -86,40 +86,6 @@ def _parse_power_event(payload: dict) -> PowerEvent | None:
     )
 
 
-def _to_dual_result(r: PowerScoringResult) -> DualModelResult:
-    """Convert a streaming PowerScoringResult to DualModelResult for unified report saving."""
-    return DualModelResult(
-        device_id=r.device_id,
-        device_category=r.device_category,
-        vendor=r.vendor,
-        phase_count=r.phase_count,
-        window_start=r.window_start,
-        window_end=str(r.window_end),
-        baseline_error=r.baseline_error,
-        baseline_threshold=r.baseline_threshold,
-        baseline_anomaly=r.baseline_anomaly,
-        phase_error=r.phase_error,
-        phase_threshold=r.phase_threshold,
-        phase_anomaly=r.phase_anomaly,
-        combined_flag=r.combined_flag,
-        overload_rule_flag=r.overload_rule_flag,
-        final_flag=r.final_flag,
-        alert_policy=r.alert_policy,
-        true_label=r.true_label,
-        anomaly_types=r.anomaly_types,
-        window_timestamps=r.window_timestamps,
-        baseline_timestep_errors=r.baseline_timestep_errors,
-        baseline_peak_timestep=r.baseline_peak_timestep,
-        baseline_top_features=r.baseline_top_features,
-        phase_timestep_errors=r.phase_timestep_errors,
-        phase_peak_timestep=r.phase_peak_timestep,
-        phase_top_features=r.phase_top_features,
-        iforest_score=r.iforest_score,
-        iforest_threshold=r.iforest_threshold,
-        iforest_flag=r.iforest_flag,
-    )
-
-
 def run_power_kafka_detection(
     kafka_config: KafkaConfig | None = None,
     inference_config: PowerInferenceConfig | None = None,
@@ -165,7 +131,6 @@ def run_power_kafka_detection(
                         row["window_end"] = str(row["window_end"])
                         out_f.write(json.dumps(row) + "\n")
 
-                        # E7: route by alert_state lifecycle
                         if result.alert_state == AlertState.SUSPECTED:
                             print(
                                 f"SUSPECTED [IF] [{result.device_category}] "
@@ -180,17 +145,12 @@ def run_power_kafka_detection(
                                 f"{result.device_id} @ {result.window_start} "
                                 f"(IF retracted — LSTM did not confirm)"
                             )
-                            # Accumulate CLEARED as FP feedback but don't print as anomaly below
 
-                        dual = _to_dual_result(result)
-                        accumulated_dual.append(dual)
+                        accumulated_dual.append(to_dual_result(result))
 
-                        # Flush JSONL every 50 writes rather than every message
                         if len(accumulated_dual) % 50 == 0:
                             out_f.flush()
 
-                        # Report files are aggregate — regenerating after every window is O(N²).
-                        # Write every 100 scored windows; final save happens at shutdown.
                         if len(accumulated_dual) % 100 == 0:
                             save_dual_results(accumulated_dual, paths, silent=True)
 
@@ -218,20 +178,11 @@ def run_power_kafka_detection(
                             )
         finally:
             consumer.close()
-            _save_session_reports(accumulated_dual, paths)
-
-
-def _save_session_reports(
-    accumulated_dual: list[DualModelResult],
-    paths: ProjectPaths,
-) -> None:
-    """Write final verbose session report on shutdown."""
-    if not accumulated_dual:
-        print("No windows scored this session — skipping report generation.")
-        return
-
-    print(f"\nFinal session report ({len(accumulated_dual)} windows scored):")
-    save_dual_results(accumulated_dual, paths)
+            if accumulated_dual:
+                print(f"\nFinal session report ({len(accumulated_dual)} windows scored):")
+                save_dual_results(accumulated_dual, paths)
+            else:
+                print("No windows scored this session — skipping report generation.")
 
 
 def main() -> None:

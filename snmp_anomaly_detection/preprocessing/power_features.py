@@ -14,10 +14,12 @@ import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, ProjectPaths
-
-
-# output_power_w is dropped by normalize_absolute_features (redundant with output_load_pct)
-LOG1P_COLS: tuple[str, ...] = ("runtime_remaining_min",)
+from snmp_anomaly_detection.preprocessing.scalar_transforms import (
+    LOG1P_COLS,
+    DELTA_PAIRS,
+    VOLT_DROP_PAIRS,
+    PHASE_V_COLS,
+)
 
 
 def load_power_dataset(paths: ProjectPaths | None = None) -> pd.DataFrame:
@@ -34,25 +36,20 @@ def add_delta_features(df: pd.DataFrame) -> pd.DataFrame:
     compressed. signed_log1p squashes extreme delta spikes during anomalies
     (e.g. battery_charge_pct dropping 97 pts in one step, output_load_pct jumping to 120).
     temperature_delta and output_load_delta give the LSTM early warning on gradual anomalies.
+
+    Column pairs are defined in scalar_transforms.DELTA_PAIRS and VOLT_DROP_PAIRS
+    so the streaming path (EventPreprocessor) uses the same column names.
     """
     df = df.copy()
-    runtime_diff  = df.groupby("device_id")["runtime_remaining_min"].diff().fillna(0.0)
-    charge_diff   = df.groupby("device_id")["battery_charge_pct"].diff().fillna(0.0)
-    temp_diff     = df.groupby("device_id")["battery_temperature_c"].diff().fillna(0.0)
-    load_diff     = df.groupby("device_id")["output_load_pct"].diff().fillna(0.0)
-    # signed_log1p: preserves direction, compresses magnitude
-    df["runtime_delta"]        = np.sign(runtime_diff)  * np.log1p(np.abs(runtime_diff))
-    df["battery_charge_delta"] = np.sign(charge_diff)   * np.log1p(np.abs(charge_diff))
-    df["temperature_delta"]    = np.sign(temp_diff)     * np.log1p(np.abs(temp_diff))
-    df["output_load_delta"]    = np.sign(load_diff)     * np.log1p(np.abs(load_diff))
+    for src, tgt in DELTA_PAIRS:
+        diff = df.groupby("device_id")[src].diff().fillna(0.0)
+        df[tgt] = np.sign(diff) * np.log1p(np.abs(diff))
     # B3: voltage drop deltas — only negative diffs (drops) kept; rises clamped to 0.
     # A phase sag only affects 3 of 32 features; clipping to drops amplifies the sag
     # signal so it is not diluted in the global MSE across all features.
-    _phase_v = ["input_voltage_l1", "input_voltage_l2", "input_voltage_l3"]
-    if all(c in df.columns for c in _phase_v):
-        for col in _phase_v:
-            drop = df.groupby("device_id")[col].diff().fillna(0.0).clip(upper=0)
-            tgt = col.replace("input_voltage_", "voltage_drop_delta_")
+    if all(c in df.columns for c in PHASE_V_COLS):
+        for src, tgt in VOLT_DROP_PAIRS:
+            drop = df.groupby("device_id")[src].diff().fillna(0.0).clip(upper=0)
             df[tgt] = np.sign(drop) * np.log1p(np.abs(drop))
     return df
 

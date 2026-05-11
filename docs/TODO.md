@@ -1,8 +1,8 @@
 # SNMP Anomaly Detection — Task Backlog
 
 <!-- Managed list — update Status field as work progresses. -->
-<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F5/F6 → E1 → E2 → E3 → E4 → E5 → E6 → E7 → C1 → E8 → D1/D2/D3/D4 -->
-<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2, E3, E4, E5, E6, E7 -->
+<!-- Priority order: F9 → F10 → B2 → A1 → B3 → F11 → F12 → F13 → F14 → F15 → F5/F6 → E1 → E2 → E3 → E4 → E5 → E6 → E7 → C1 → E8 → D1/D2/D3/D4 -->
+<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2, E3, E4, E5, E6, E7, F11 -->
 
 <!-- ================================================================ -->
 <!-- F-series: Code review bug fixes (must resolve before feature work) -->
@@ -239,37 +239,395 @@ python3 -m snmp_anomaly_detection detect-power-csv
 ---
 
 ## F5 — Expose imbalance constants as public API in `phase_features.py`
-**Status:** Pending  
-**Priority:** Low — private names (`_IMBALANCE_COLS`, `_IMBALANCE_CLIP_MAX`) used across two inference modules  
+**Status:** Superseded by F11  
+**Priority:** Low — resolved as a side effect of F11: `IMBALANCE_COLS` and `IMBALANCE_CLIP_MAX` will be public constants in `scalar_transforms.py`, imported by all callers  
 **Files:** [dual_model_scorer.py:194](../snmp_anomaly_detection/inference/dual_model_scorer.py#L194), [power_stream_processor.py:371](../snmp_anomaly_detection/inference/power_stream_processor.py#L371)
 
-### Fix
-Rename `_IMBALANCE_COLS` → `IMBALANCE_COLS` and `_IMBALANCE_CLIP_MAX` → `IMBALANCE_CLIP_MAX` in `phase_features.py`. Update both import sites.
+No separate action needed — close this when F11 is merged.
 
 ---
 
 ## F6 — Stop `process_event` from mutating its `PowerEvent` argument
-**Status:** Pending  
-**Priority:** Low — in-place mutation of caller's dict is surprising; breaks replay/retry  
+**Status:** Superseded by F12  
+**Priority:** Low — resolved as a side effect of F12: `EventPreprocessor.process()` copies `event.feature_values` before modifying it, so the caller's dict is never touched  
 **File:** [power_stream_processor.py:498](../snmp_anomaly_detection/inference/power_stream_processor.py#L498)
 
-### Issue
-```python
-event.feature_values[col] = (
-    min(max(event.feature_values[col], 0.0), _IMBALANCE_CLIP_MAX)
-    / _IMBALANCE_CLIP_MAX
-)
-```
-The imbalance clipping overwrites the original event values. A caller that logs the raw event before scoring will see silently modified values.
+No separate action needed — close this when F12 is merged.
 
-### Fix
-Apply the clipping transform to a local dict copy before building `p_raw`:
+---
+
+## F11 — Extract `preprocessing/scalar_transforms.py`: single source of truth for all feature math
+**Status:** Done — 2026-05-11  
+**Priority:** High — root cause of the CSV/Kafka preprocessing gap; every future transport will diverge again without this foundation  
+**Depends on:** Nothing  
+**Files:** [preprocessing/power_features.py](../snmp_anomaly_detection/preprocessing/power_features.py), [preprocessing/phase_features.py](../snmp_anomaly_detection/preprocessing/phase_features.py)
+
+### Why this task exists
+
+The CSV inference path and Kafka inference path currently have **two separate implementations of the same preprocessing logic**. The Kafka path (`_apply_preprocessing` in `power_stream_processor.py`) was written by hand as a copy of the pandas functions, with comments like `# Mirrors apply_log1p_skewed from power_features.py`. That copy has already drifted in two places (F11 originally: missing `aggregate_phase_metrics`; F12 originally: missing `enrich_imbalance_features`). Any future transport (MQTT, ZMQ, HTTP push) would require a third copy.
+
+This task extracts the core math into a transport-agnostic module so there is exactly one implementation that everything else calls.
+
+### What to build
+
+**New file: `preprocessing/scalar_transforms.py`**
+
+Pure functions only — no pandas, no torch, only numpy. Each function takes a plain `dict` (feature values) and mutates it in-place (or takes additional arguments for stateful steps). This matches the streaming path's natural interface and is equally usable by a DataFrame row iteration.
+
 ```python
-clipped = dict(event.feature_values)
-for col in IMBALANCE_COLS:
-    if col in clipped:
-        clipped[col] = min(max(clipped[col], 0.0), IMBALANCE_CLIP_MAX) / IMBALANCE_CLIP_MAX
-p_raw = np.array([[clipped.get(c, 0.0) for c in PHASE_LEVEL_FEATURES]])
+# preprocessing/scalar_transforms.py
+
+import numpy as np
+
+# ── Step 1: phase voltage aggregation ──────────────────────────────────────
+_PHASE_V_COLS = ("input_voltage_l1", "input_voltage_l2", "input_voltage_l3")
+
+def aggregate_phase_voltages(fv: dict) -> None:
+    """Recompute input_voltage_v = mean(L1, L2, L3) when phase columns present.
+    Must run before normalize_absolute so input_voltage_dev_pct uses the averaged value.
+    Matches aggregate_phase_metrics() in power_features.py.
+    """
+    if all(c in fv for c in _PHASE_V_COLS):
+        fv["input_voltage_v"] = sum(fv[c] for c in _PHASE_V_COLS) / 3.0
+
+# ── Step 2: B2 vendor-agnostic normalization ────────────────────────────────
+def normalize_absolute(
+    fv: dict,
+    rated_capacity_w: float,
+    nominal_voltage_v: float,
+    rated_battery_v: float,
+) -> None:
+    """Replace absolute V/A/W features with vendor-agnostic ratios/deviations.
+    Matches normalize_absolute_features() in power_features.py.
+    """
+    cap  = max(rated_capacity_w, 1.0)
+    nomv = max(nominal_voltage_v, 1.0)
+    rated_current = cap / nomv
+    fv["output_current_ratio"]   = fv.get("output_current_a", 0.0) / max(rated_current, 0.01)
+    fv["input_voltage_dev_pct"]  = (fv.get("input_voltage_v",  nomv) - nomv) / nomv * 100.0
+    fv["output_voltage_dev_pct"] = (fv.get("output_voltage_v", nomv) - nomv) / nomv * 100.0
+    if rated_battery_v > 0:
+        rated_bv = max(rated_battery_v, 1.0)
+        fv["battery_voltage_ratio"] = fv.get("battery_voltage_v", 0.0) / rated_bv
+        rated_bc = cap / rated_bv / 10.0
+        fv["battery_current_ratio"] = fv.get("battery_current_a", 0.0) / max(rated_bc, 0.01)
+    else:
+        fv["battery_voltage_ratio"] = 0.0
+        fv["battery_current_ratio"] = 0.0
+
+# ── Step 3: log1p on skewed columns ────────────────────────────────────────
+_LOG1P_COLS = ("runtime_remaining_min",)
+
+def apply_log1p(fv: dict) -> None:
+    """log1p transform on skewed columns. Must run before compute_deltas so
+    runtime_delta is the diff of log1p(runtime), matching training order.
+    """
+    for col in _LOG1P_COLS:
+        if col in fv:
+            fv[col] = float(np.log1p(max(fv[col], 0.0)))
+
+# ── Step 4a: signed-log1p delta features ───────────────────────────────────
+_DELTA_PAIRS = (
+    ("runtime_remaining_min",  "runtime_delta"),
+    ("battery_temperature_c",  "temperature_delta"),
+    ("output_load_pct",        "output_load_delta"),
+)
+
+def compute_deltas(fv: dict, prev: dict) -> None:
+    """Per-device signed_log1p delta. prev is the feature dict from the previous event."""
+    for src, tgt in _DELTA_PAIRS:
+        cur = fv.get(src, 0.0)
+        if prev:
+            diff = cur - prev.get(src, cur)
+            fv[tgt] = float(np.sign(diff) * np.log1p(abs(diff)))
+        else:
+            fv[tgt] = 0.0
+
+# ── Step 4b: voltage drop delta features (B3) ──────────────────────────────
+_VOLT_DROP_PAIRS = (
+    ("input_voltage_l1", "voltage_drop_delta_l1"),
+    ("input_voltage_l2", "voltage_drop_delta_l2"),
+    ("input_voltage_l3", "voltage_drop_delta_l3"),
+)
+
+def compute_volt_drop_deltas(fv: dict, prev: dict) -> None:
+    """Negative-only voltage diffs — only drops carry phase sag signal."""
+    for src, tgt in _VOLT_DROP_PAIRS:
+        cur = fv.get(src, 0.0)
+        if prev:
+            diff = min(cur - prev.get(src, cur), 0.0)
+            fv[tgt] = float(np.sign(diff) * np.log1p(abs(diff)))
+        else:
+            fv[tgt] = 0.0
+
+# ── Step 5: imbalance features ──────────────────────────────────────────────
+_PHASE_V_COLS = ("input_voltage_l1", "input_voltage_l2", "input_voltage_l3")
+_PHASE_I_COLS = ("input_current_l1", "input_current_l2", "input_current_l3")
+
+def compute_imbalance(fv: dict) -> None:
+    """Recompute voltage_imbalance_pct and current_skew_pct from raw phase columns
+    using the NEMA MG-1 formula. Overwrites any pre-computed value from the collector
+    so the formula is always identical to training.
+    Matches enrich_imbalance_features() in phase_features.py.
+    """
+    if all(c in fv for c in _PHASE_V_COLS):
+        vs  = [fv[c] for c in _PHASE_V_COLS]
+        avg = sum(vs) / 3.0
+        fv["voltage_imbalance_pct"] = (max(abs(v - avg) for v in vs) / max(avg, 1e-6)) * 100.0
+    if all(c in fv for c in _PHASE_I_COLS):
+        cs  = [fv[c] for c in _PHASE_I_COLS]
+        avg = sum(cs) / 3.0
+        fv["current_skew_pct"] = (max(abs(c - avg) for c in cs) / max(avg, 1e-6)) * 100.0
+
+# Public constants used by EventPreprocessor and scalar wrappers in power_features.py
+ALL_DELTA_SOURCES = tuple(s for s, _ in _DELTA_PAIRS) + tuple(s for s, _ in _VOLT_DROP_PAIRS)
+IMBALANCE_CLIP_MAX: float = 10.0
+IMBALANCE_COLS: tuple[str, ...] = ("voltage_imbalance_pct", "current_skew_pct")
+```
+
+### Update pandas wrappers to call scalar functions
+
+`aggregate_phase_metrics`, `normalize_absolute_features`, `apply_log1p_skewed`, `add_delta_features` in `power_features.py` and `enrich_imbalance_features` in `phase_features.py` should each call the matching scalar function from `scalar_transforms.py` rather than containing their own implementation. This guarantees the math is identical — the pandas wrappers just apply the scalar function row-by-row or vectorise where safe.
+
+The imbalance constants `_IMBALANCE_COLS` and `_IMBALANCE_CLIP_MAX` currently scattered across `phase_features.py`, `dual_model_scorer.py`, and `power_stream_processor.py` are replaced by `IMBALANCE_COLS` and `IMBALANCE_CLIP_MAX` from `scalar_transforms.py` — resolving **F5** as a side effect.
+
+### Validation
+```bash
+python3 -m compileall snmp_anomaly_detection   # syntax check
+python3 -m snmp_anomaly_detection detect-power-csv
+# Confirm anomaly_results.csv matches pre-refactor output exactly (no behaviour change in this step)
+```
+
+---
+
+## F12 — Create `inference/event_preprocessor.py`: shared preprocessing contract for all transports
+**Status:** Done — 2026-05-11  
+**Priority:** High — the interface that every transport (Kafka, CSV, MQTT, ZMQ, …) calls; without it each transport remains a hand-rolled copy  
+**Depends on:** F11 (scalar_transforms.py must exist first)  
+**Files:** [inference/event_preprocessor.py](../snmp_anomaly_detection/inference/event_preprocessor.py) ← new file
+
+### What to build
+
+A stateful class that takes one `PowerEvent` at a time and applies all preprocessing steps in the canonical order by calling functions from `scalar_transforms.py`. This is the single preprocessing contract — no transport writes feature-engineering logic directly.
+
+```python
+# inference/event_preprocessor.py
+import dataclasses
+from snmp_anomaly_detection.preprocessing import scalar_transforms as T
+
+class EventPreprocessor:
+    """Stateful per-device preprocessing for single-event inference.
+
+    Maintains per-device previous-row state for delta features.
+    Call process() once per event in arrival order per device.
+    Call reset_device() when a device reconnects after a gap to avoid
+    stale deltas from the previous session.
+    """
+
+    def __init__(self):
+        self._prev: dict[str, dict] = {}   # device_id → last post-log1p feature values
+
+    def process(self, event: PowerEvent) -> PowerEvent:
+        fv = dict(event.feature_values)    # never mutate the caller's dict (fixes F6)
+
+        T.aggregate_phase_voltages(fv)                      # step 1
+        T.normalize_absolute(                               # step 2
+            fv,
+            event.rated_capacity_w,
+            event.nominal_voltage_v,
+            event.rated_battery_v,
+        )
+        T.apply_log1p(fv)                                   # step 3
+        prev = self._prev.get(event.device_id, {})
+        T.compute_deltas(fv, prev)                          # step 4a
+        T.compute_volt_drop_deltas(fv, prev)                # step 4b
+        self._prev[event.device_id] = {                     # persist for next event
+            s: fv.get(s, 0.0) for s in T.ALL_DELTA_SOURCES
+        }
+        T.compute_imbalance(fv)                             # step 5
+
+        return dataclasses.replace(event, feature_values=fv)
+
+    def reset_device(self, device_id: str) -> None:
+        """Clear per-device delta state. Call when a device reconnects."""
+        self._prev.pop(device_id, None)
+```
+
+Because `process()` copies `event.feature_values` before modifying it, this also resolves **F6** (PowerEvent mutation) as a side effect.
+
+### Verification property
+
+Given the same sequence of raw rows for a device, `EventPreprocessor.process()` applied row-by-row must produce feature dicts identical to what `power_features.py` pandas functions produce when applied to the whole DataFrame. This can be verified with a simple test:
+
+```python
+# pseudo-test
+preprocessor = EventPreprocessor()
+for _, row in device_df.iterrows():
+    event = PowerEvent.from_csv_row(row)
+    processed = preprocessor.process(event)
+    # processed.feature_values should match the corresponding row
+    # in the pandas-preprocessed DataFrame for every feature in BASELINE_UPS_FEATURES
+```
+
+### Validation
+```bash
+python3 -m compileall snmp_anomaly_detection
+# No behaviour change yet — EventPreprocessor exists but is not wired into any path.
+# Verify by running detect-power-csv and confirm output is unchanged.
+```
+
+---
+
+## F13 — Migrate both inference paths to `EventPreprocessor`; delete `_apply_preprocessing`
+**Status:** Done — 2026-05-11  
+**Priority:** High — closes the CSV/Kafka gap permanently; after this step adding a new transport costs zero preprocessing work  
+**Depends on:** F12 (EventPreprocessor must exist first)  
+**Files:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py), [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+
+### What to change
+
+**`power_stream_processor.py`**
+
+1. Remove `_apply_preprocessing()` entirely — all ~60 lines of hand-rolled feature math.
+2. Remove the local constants that duplicated `scalar_transforms.py`: `_LOG1P_COLS`, `_DELTA_SOURCES`, `_DELTA_TARGETS`, `_VOLT_DROP_SOURCES`, `_VOLT_DROP_TARGETS`.
+3. Construct one `EventPreprocessor` in `PowerStreamProcessor.__init__()`:
+   ```python
+   self._preprocessor = EventPreprocessor()
+   ```
+4. Replace the `self._apply_preprocessing(event)` call in `process_event()` with:
+   ```python
+   event = self._preprocessor.process(event)
+   ```
+5. Wire `reset_device()` into the existing device-disconnect/reset path so delta state is cleared on reconnect.
+
+**`dual_model_scorer.py`**
+
+1. Remove the four pandas preprocessing calls (lines 206–210): `aggregate_phase_metrics`, `normalize_absolute_features`, `apply_log1p_skewed`, `add_delta_features`, `enrich_imbalance_features`.
+2. Construct an `EventPreprocessor` once before the device loop.
+3. Convert each DataFrame row to a `PowerEvent`, call `preprocessor.process()`, then extract the feature vector — instead of bulk-transforming the entire DataFrame first.
+
+The imbalance clipping block in `dual_model_scorer.py` (lines 231–234) is also deleted — it now lives inside `scalar_transforms.compute_imbalance()`.
+
+### Why iterating rows is acceptable for CSV
+
+`dual_model_scorer.py` already iterates per-device inside a Python loop. The vectorised pandas preprocessing was an optimisation for bulk transforms but introduced the divergence. For the dataset sizes in scope (≤50K rows), per-row Python is fast enough; the LSTM forward passes dominate wall-clock time by orders of magnitude.
+
+### Validation
+```bash
+# Run full pipeline before and after — outputs must be byte-identical for CSV path
+python3 -m snmp_anomaly_detection detect-power-csv
+diff outputs/power_dual/anomaly_results_before.csv outputs/power_dual/anomaly_results.csv
+
+# Run Kafka path with synthetic producer
+python3 -m snmp_anomaly_detection detect-power-kafka
+# Verify: for the same device row, Kafka and CSV now produce identical feature values
+# (compare input_voltage_dev_pct, voltage_imbalance_pct, delta features per device)
+```
+
+---
+
+## F14 — Extract shared `DualModelScorer` and `RollingWindowBuffer`; remove scoring duplication
+**Status:** Done — 2026-05-11  
+**Priority:** Medium — same scoring/windowing logic exists in both `dual_model_scorer.py` and `power_stream_processor.py`; a change to thresholding or alert policy requires two edits  
+**Depends on:** F13 (inference paths must use EventPreprocessor before refactoring scoring)  
+**Files:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py), [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py)
+
+### Current duplication
+
+| Logic | dual_model_scorer.py | power_stream_processor.py |
+|---|---|---|
+| LSTM window scoring + MSE exclusion | `_score_window_detailed()` | `_score_detailed()` |
+| IForest scoring + ratio guard | inline in window loop | `_score_iforest_row()` |
+| Overload rule | inline | inline |
+| OR/AND alert policy | inline | inline |
+| Per-category threshold lookup | inline | inline |
+
+Any change to alert policy (E7 state machine, threshold tuning) currently requires editing both files. This is the same copy-problem as preprocessing.
+
+### What to build
+
+**`inference/scorer.py`** — a stateless scoring class that both transports inject:
+
+```python
+class DualModelScorer:
+    def __init__(self, baseline_model, phase_model, iforest_models,
+                 baseline_scaler, phase_scaler,
+                 baseline_meta, phase_meta, iforest_meta,
+                 config: InferenceConfig):
+        ...
+
+    def score_window(
+        self,
+        device_id: str,
+        device_category: str,
+        baseline_window: np.ndarray,     # (seq_len, n_baseline_features)
+        phase_window: np.ndarray | None, # (seq_len, n_phase_features) or None
+        iforest_row: np.ndarray,         # (n_baseline_features,) — current row
+        raw_load_pct: float,
+        timestamps: list[str],
+    ) -> PowerScoringResult:
+        ...
+```
+
+**`inference/rolling_buffer.py`** — extracted from `PowerStreamProcessor`, used by any transport that needs windowing:
+
+```python
+class RollingWindowBuffer:
+    def push(self, device_id: str, vector: list[float]) -> np.ndarray | None:
+        """Add one vector. Returns a (seq_len, n_feat) window when full, else None."""
+```
+
+### Result
+
+Both `dual_model_scorer.py` (CSV transport) and `power_stream_processor.py` (Kafka transport) become thin wrappers: load models → construct `EventPreprocessor` + `DualModelScorer` → iterate events.
+
+### Validation
+```bash
+python3 -m snmp_anomaly_detection detect-power-csv   # output unchanged
+python3 -m snmp_anomaly_detection detect-power-kafka  # output unchanged
+```
+
+---
+
+## F15 — Reduce transport files to thin adapters: wire format only, no logic
+**Status:** Pending  
+**Priority:** Medium — once F13 and F14 are done, the transport files should contain only deserialisation; this task removes the last remnants of duplicated logic  
+**Depends on:** F14  
+**Files:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py), [streaming/detect_power_kafka.py](../snmp_anomaly_detection/streaming/detect_power_kafka.py)
+
+### Target shape of each transport file
+
+```python
+# streaming/detect_power_kafka.py  (after F15 — ~50 lines)
+preprocessor = EventPreprocessor()
+scorer       = DualModelScorer.from_artifacts(paths)
+consumer     = KafkaConsumer(...)
+
+for msg in consumer:
+    event = PowerEvent.from_kafka(msg.value)          # deserialise
+    event = preprocessor.process(event)               # preprocess
+    result = scorer.score_window(...)                 # score
+    write_output(result)                              # emit
+
+# inference/csv_transport.py  (after F15 — ~50 lines, replaces dual_model_scorer.py main())
+preprocessor = EventPreprocessor()
+scorer       = DualModelScorer.from_artifacts(paths)
+
+for row in pd.read_csv(path).itertuples():
+    event = PowerEvent.from_csv_row(row)              # deserialise
+    event = preprocessor.process(event)               # preprocess
+    result = scorer.score_window(...)                 # score
+    results.append(result)
+```
+
+Adding a new transport — MQTT, ZMQ, gRPC, HTTP webhook — requires only a `from_wire()` deserialiser and a consumer loop. No preprocessing logic, no scoring logic, no windowing logic. The transport is ~50 lines.
+
+### Validation
+```bash
+# All three commands must produce identical results to pre-F15 baselines
+python3 -m snmp_anomaly_detection detect-power-csv
+python3 -m snmp_anomaly_detection detect-power-kafka
+python3 -m compileall snmp_anomaly_detection
 ```
 
 ---
