@@ -111,14 +111,34 @@ def _random_profiles(device_count: int, rng: random.Random) -> list[PowerDeviceP
         cap_lo, cap_hi = _CAPACITY_RANGE_BY_CATEGORY[category]
         rated_capacity_w = round(rng.uniform(cap_lo, cap_hi), 1)
 
+        # 120 V: US vendors; 230 V: EU vendors; generic gets a random pick
+        if vendor in ("apc", "cisco"):
+            nominal_voltage_v = 120.0
+        elif vendor in ("eaton", "liebert", "raritan"):
+            nominal_voltage_v = 230.0
+        else:
+            nominal_voltage_v = rng.choice([120.0, 230.0])
+
         if category == "ups":
             battery_ah = rng.choice([7.2, 12.0, 20.0, 40.0])
             battery_life_years = round(rng.uniform(2.0, 5.0), 1)
             install_age_days = round(rng.uniform(0.0, battery_life_years * 365 * 0.9), 1)
+            # Mirror _DEFAULT_POWER_PROFILES breakpoints: ≤4kW→24V, ≤6kW→48V, ≤8kW→96V, ≤12kW→120V, else→192V
+            if rated_capacity_w <= 4000.0:
+                rated_battery_v = 24.0
+            elif rated_capacity_w <= 6000.0:
+                rated_battery_v = 48.0
+            elif rated_capacity_w <= 8000.0:
+                rated_battery_v = 96.0
+            elif rated_capacity_w <= 12000.0:
+                rated_battery_v = 120.0
+            else:
+                rated_battery_v = 192.0
         else:
             battery_ah = 0.0
             battery_life_years = 3.0
             install_age_days = 0.0
+            rated_battery_v = 0.0
 
         profiles.append(PowerDeviceProfile(
             device_id=f"{category}_{vendor}_{idx + 1:02d}",
@@ -126,7 +146,9 @@ def _random_profiles(device_count: int, rng: random.Random) -> list[PowerDeviceP
             vendor=vendor,
             phase_count=phase_count,
             rated_capacity_w=rated_capacity_w,
+            nominal_voltage_v=nominal_voltage_v,
             battery_ah=battery_ah,
+            rated_battery_v=rated_battery_v,
             battery_expected_life_years=battery_life_years,
             install_age_days=install_age_days,
         ))

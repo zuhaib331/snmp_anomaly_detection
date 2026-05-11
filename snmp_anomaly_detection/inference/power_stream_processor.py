@@ -77,14 +77,14 @@ class PowerScoringResult:
     baseline_error: float
     baseline_threshold: float
     baseline_peak_timestep: str
-    baseline_top_features: str
+    baseline_top_features: list[str]
     baseline_timestep_errors: list[float]
     # Phase model
     phase_anomaly: int
     phase_error: float
     phase_threshold: float
     phase_peak_timestep: str
-    phase_top_features: str
+    phase_top_features: list[str]
     phase_timestep_errors: list[float]
     # Combined flags — mirrors DualModelResult
     combined_flag: int
@@ -101,6 +101,8 @@ class PowerScoringResult:
     iforest_score: float = 0.0
     iforest_threshold: float = 0.0
     iforest_flag: int = 0
+    iforest_peak_timestep: str = ""
+    iforest_top_features: list[str] = field(default_factory=list)
     # E7: two-stage alert lifecycle
     alert_state: AlertState = AlertState.LSTM_ONLY
 
@@ -259,7 +261,12 @@ class PowerStreamProcessor:
             json.dump(raw, f)
 
     def _make_suspected_result(
-        self, event: PowerEvent, if_score: float, if_threshold: float, if_flag: int
+        self,
+        event: PowerEvent,
+        if_score: float,
+        if_threshold: float,
+        if_flag: int,
+        if_top_features: list[str],
     ) -> PowerScoringResult:
         """Minimal SUSPECTED result emitted when IF fires before the LSTM buffer is full."""
         ts_str = str(event.timestamp)
@@ -277,13 +284,13 @@ class PowerStreamProcessor:
             baseline_error=0.0,
             baseline_threshold=0.0,
             baseline_peak_timestep="",
-            baseline_top_features="",
+            baseline_top_features=[],
             baseline_timestep_errors=[],
             phase_anomaly=0,
             phase_error=0.0,
             phase_threshold=0.0,
             phase_peak_timestep="",
-            phase_top_features="",
+            phase_top_features=[],
             phase_timestep_errors=[],
             combined_flag=0,
             overload_rule_flag=0,
@@ -296,6 +303,8 @@ class PowerStreamProcessor:
             iforest_score=round(if_score, 6),
             iforest_threshold=round(if_threshold, 6),
             iforest_flag=if_flag,
+            iforest_peak_timestep=ts_str,
+            iforest_top_features=if_top_features,
             alert_state=AlertState.SUSPECTED,
         )
 
@@ -333,6 +342,13 @@ class PowerStreamProcessor:
 
         # E6: score IF on the current row immediately — no buffer needed
         if_score, if_threshold, if_flag = self._scorer.score_iforest_row(b_scaled, event.device_category)
+        iforest_peak_timestep = str(event.timestamp) if if_flag else ""
+        if_top_features: list[str] = (
+            self._scorer.get_iforest_top_features(
+                np.array(b_scaled), event.device_category, list(BASELINE_UPS_FEATURES)
+            )
+            if if_flag else []
+        )
 
         b_window = self._baseline_windows.push(event.device_id, b_scaled)
 
@@ -352,7 +368,7 @@ class PowerStreamProcessor:
                     if_threshold=if_threshold,
                     if_peak_timestep=str(event.timestamp),
                 )
-                return self._make_suspected_result(event, if_score, if_threshold, if_flag)
+                return self._make_suspected_result(event, if_score, if_threshold, if_flag, if_top_features)
             return None
 
         win_timestamps = list(self._ts_buffers[event.device_id])
@@ -474,7 +490,7 @@ class PowerStreamProcessor:
             baseline_error=round(b_detail["mean_error"], 6),
             baseline_threshold=round(b_thresh, 6),
             baseline_peak_timestep=win_timestamps[b_peak_idx] if win_timestamps else "",
-            baseline_top_features=",".join(b_detail["top_features"]),
+            baseline_top_features=b_detail["top_features"],
             baseline_timestep_errors=b_detail["timestep_errors"],
             phase_anomaly=p_flag,
             phase_error=round(p_detail["mean_error"], 6),
@@ -483,7 +499,7 @@ class PowerStreamProcessor:
                 win_timestamps[p_peak_idx]
                 if win_timestamps and p_detail["timestep_errors"] else ""
             ),
-            phase_top_features=",".join(p_detail["top_features"]),
+            phase_top_features=p_detail["top_features"],
             phase_timestep_errors=p_detail["timestep_errors"],
             combined_flag=combined,
             overload_rule_flag=overload_rule,
@@ -497,8 +513,57 @@ class PowerStreamProcessor:
             iforest_score=round(if_score, 6),
             iforest_threshold=round(if_threshold, 6),
             iforest_flag=effective_if_flag,
+            iforest_peak_timestep=iforest_peak_timestep,
+            iforest_top_features=if_top_features,
             alert_state=alert_state,
         )
+
+
+def format_power_alert(result: PowerScoringResult) -> str | None:
+    """Return a one-line console string for actionable results, or None for normal windows.
+
+    Handles all three alert states so transport files contain no formatting logic:
+      SUSPECTED → early IF warning (amber)
+      CLEARED   → IF retraction notice (grey)
+      final_flag + not CLEARED → full LSTM/IF alarm (red/orange)
+    """
+    state = result.alert_state
+    if state == AlertState.SUSPECTED:
+        return (
+            f"SUSPECTED [IF] [{result.device_category}] "
+            f"{result.device_id} @ {result.window_start} "
+            f"if_score={result.iforest_score:.4f} < thresh={result.iforest_threshold:.4f}"
+        )
+    if state == AlertState.CLEARED:
+        return (
+            f"CLEARED [{result.device_category}] "
+            f"{result.device_id} @ {result.window_start} "
+            "(IF retracted — LSTM did not confirm)"
+        )
+    if result.final_flag:
+        prefix = "COMPOUND " if result.compound_alert else ""
+        msg = (
+            f"{prefix}{state.value.upper()} [{result.device_category}] "
+            f"{result.device_id} "
+            f"{result.window_start} → {result.window_end} "
+            f"baseline={result.baseline_anomaly} "
+            f"(err={result.baseline_error:.4f} > {result.baseline_threshold:.4f}"
+            + (f", top=[{','.join(result.baseline_top_features)}]" if result.baseline_top_features else "")
+            + f") phase={result.phase_anomaly}"
+        )
+        if result.phase_anomaly:
+            msg += (
+                f" (err={result.phase_error:.4f} > {result.phase_threshold:.4f}"
+                + (f", top=[{','.join(result.phase_top_features)}]" if result.phase_top_features else "")
+                + ")"
+            )
+        msg += f" if={result.iforest_flag}"
+        if result.iforest_flag:
+            msg += f" (score={result.iforest_score:.4f})"
+        if result.compound_alert:
+            msg += f"  peer={result.compound_alert_peer}"
+        return msg
+    return None
 
 
 def to_dual_result(r: PowerScoringResult) -> DualModelResult:
@@ -530,4 +595,6 @@ def to_dual_result(r: PowerScoringResult) -> DualModelResult:
         iforest_score=r.iforest_score,
         iforest_threshold=r.iforest_threshold,
         iforest_flag=r.iforest_flag,
+        iforest_peak_timestep=r.iforest_peak_timestep,
+        iforest_top_features=r.iforest_top_features,
     )

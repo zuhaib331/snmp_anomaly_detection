@@ -414,6 +414,9 @@ snmp_anomaly_detection/artifacts/  # experiment snapshots (not auto-cleaned)
 | F12 | Create `EventPreprocessor` in `inference/event_preprocessor.py` | Done 2026-05-11 |
 | F13 | Migrate both inference paths to `EventPreprocessor`; delete `_apply_preprocessing` | Done 2026-05-11 |
 | F14 | Extract shared `DualModelScorer` + `RollingWindowBuffer` into `inference/model_scorer.py` | Done 2026-05-11 |
+| F16 | Fix type mismatch: `to_dual_result()` `str` → `list[str]` for top-feature fields | Done 2026-05-11 |
+| F17 | Add `iforest_peak_timestep` + `iforest_top_features` to `PowerScoringResult` | Done 2026-05-11 |
+| F15 | Reduce transport files to thin adapters (`PowerEvent.from_dict`, `format_power_alert`) | Done 2026-05-11 |
 
 ---
 
@@ -421,7 +424,9 @@ snmp_anomaly_detection/artifacts/  # experiment snapshots (not auto-cleaned)
 
 | ID | Feature | Depends on |
 |---|---|---|
-| F15 | Reduce transport files to ~50-line thin adapters | F14 (done) |
+| ~~F16~~ | ~~Fix type mismatch: `to_dual_result()` passes `str` for `list[str]` top-feature fields~~ | Done 2026-05-11 |
+| ~~F17~~ | ~~Add `iforest_peak_timestep` + `iforest_top_features` to `PowerScoringResult`~~ | Done 2026-05-11 |
+| F15 | Reduce transport files to thin adapters | Done 2026-05-11 |
 | A1 | SNMP OID adapter layer: vendor-agnostic OID resolution + unit normalization | B2 (done) |
 | C1 | ClickHouse storage integration (replace .jsonl outputs) | B1, B2 done |
 | E8 | Separate telemetry stream from alert lifecycle stream | C1, D1 |

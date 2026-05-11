@@ -2,7 +2,7 @@
 
 <!-- Managed list — update Status field as work progresses. -->
 <!-- Priority order: F9 → F10 → B2 → A1 → B3 → F11 → F12 → F13 → F14 → F15 → F5/F6 → E1 → E2 → E3 → E4 → E5 → E6 → E7 → C1 → E8 → D1/D2/D3/D4 -->
-<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2, E3, E4, E5, E6, E7, F11 -->
+<!-- Done: F1, F2, F3, F4, F7, F8, F9, F10, B1, B2, B3, E1, E2, E3, E4, E5, E6, E7, F11, F12, F13, F14 -->
 
 <!-- ================================================================ -->
 <!-- F-series: Code review bug fixes (must resolve before feature work) -->
@@ -590,10 +590,22 @@ python3 -m snmp_anomaly_detection detect-power-kafka  # output unchanged
 ---
 
 ## F15 — Reduce transport files to thin adapters: wire format only, no logic
-**Status:** Pending  
+**Status:** Done — 2026-05-11 (`dual_model_scorer.py` 21 lines; `detect_power_kafka.py` 102 lines)  
 **Priority:** Medium — once F13 and F14 are done, the transport files should contain only deserialisation; this task removes the last remnants of duplicated logic  
 **Depends on:** F14  
 **Files:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py), [streaming/detect_power_kafka.py](../snmp_anomaly_detection/streaming/detect_power_kafka.py)
+
+### Remaining work
+
+`dual_model_scorer.py` is already a 22-line thin adapter. `detect_power_kafka.py` still has ~150 lines of non-transport logic:
+
+- `_parse_power_event()` (32 lines) — event construction from a raw dict is transport-agnostic and should live in `PowerEvent` as a `from_dict()` classmethod or in `EventPreprocessor`
+- Alert display printing (40+ lines in the event loop) — should move to a shared `format_alert()` helper in `model_scorer.py` or a dedicated `alerts.py`
+- Session reporting and `accumulated_dual` flush management (~20 lines) — could be a shared `SessionReporter` used by any transport
+
+**Gap 4 — `_B2_RAW_COLS` preprocessing knowledge leaks into transport layer** ([detect_power_kafka.py:37](../snmp_anomaly_detection/streaming/detect_power_kafka.py#L37))
+
+`_B2_RAW_COLS` lists raw pre-normalization column names (`input_voltage_v`, `battery_voltage_v`, etc.) that the Kafka parser must include in `feature_values` so `EventPreprocessor.normalize_absolute()` can compute ratios. This is preprocessing knowledge that should live in `EventPreprocessor` (e.g., exported as `REQUIRED_RAW_COLS`) or in `PowerEvent`, not in the transport file. A new MQTT/ZMQ transport would need to rediscover and duplicate this list.
 
 ### Target shape of each transport file
 
@@ -628,6 +640,104 @@ Adding a new transport — MQTT, ZMQ, gRPC, HTTP webhook — requires only a `fr
 python3 -m snmp_anomaly_detection detect-power-csv
 python3 -m snmp_anomaly_detection detect-power-kafka
 python3 -m compileall snmp_anomaly_detection
+```
+
+---
+
+## F16 — Fix type mismatch: `to_dual_result()` passes `str` for `list[str]` top-feature fields
+**Status:** Done — 2026-05-11  
+**Priority:** High — silent type bug causes wrong JSON/CSV output in Kafka streaming reports  
+**File:** [inference/power_stream_processor.py:527](../snmp_anomaly_detection/inference/power_stream_processor.py#L527)
+
+### Issue
+
+`PowerScoringResult.baseline_top_features` and `phase_top_features` are stored as comma-joined `str` (line 78, 87 of `power_stream_processor.py`). `DualModelResult.baseline_top_features` and `phase_top_features` are `list[str]` (line 316, 319 of `model_scorer.py`). `to_dual_result()` passes the strings through without splitting:
+
+```python
+# to_dual_result() — both these pass str into a list[str] field
+baseline_top_features=r.baseline_top_features,   # "output_load_pct,runtime_delta"
+phase_top_features=r.phase_top_features,          # "voltage_imbalance_pct"
+```
+
+Python's dataclass doesn't enforce types at runtime, so no error is raised. But `asdict()` + JSON serialisation via `save_dual_results()` in the Kafka path writes a bare string instead of a JSON array, breaking downstream consumers.
+
+### Fix
+
+Either make `PowerScoringResult` store `list[str]` (preferred — consistent with `DualModelResult`):
+
+```python
+# power_stream_processor.py PowerScoringResult
+baseline_top_features: list[str] = field(default_factory=list)
+phase_top_features: list[str] = field(default_factory=list)
+```
+
+And update the two fill sites (process_event lines ~477, ~488) from `",".join(...)` to just pass the list directly.
+
+Or, if keeping `str` in `PowerScoringResult`, split in `to_dual_result()`:
+
+```python
+baseline_top_features=[f for f in r.baseline_top_features.split(",") if f],
+phase_top_features=[f for f in r.phase_top_features.split(",") if f],
+```
+
+The first option is cleaner and removes an implicit representation convention.
+
+### Validation
+```bash
+python3 -m snmp_anomaly_detection detect-power-csv
+# Confirm anomaly_windows_detail.json has baseline.top_features as an array, not a string
+```
+
+---
+
+## F17 — Add `iforest_peak_timestep` and `iforest_top_features` to `PowerScoringResult`
+**Status:** Done — 2026-05-11  
+**Priority:** Medium — IF attribution fields are always empty in Kafka streaming output; NOC alarms lose peak-timestep and top-feature context for IF-triggered alerts  
+**File:** [inference/power_stream_processor.py:67](../snmp_anomaly_detection/inference/power_stream_processor.py#L67)
+
+### Issue
+
+`DualModelResult` (model_scorer.py) has `iforest_peak_timestep: str` and `iforest_top_features: list[str]`. `PowerScoringResult` has neither. `to_dual_result()` therefore always leaves both as `""` / `[]` in Kafka-sourced `DualModelResult` entries, even when IF fired with clear top features.
+
+The IF scoring in `process_event()` (power_stream_processor.py:335) already calls `score_iforest_row()` which returns the score and flag, but the peak timestep and feature attribution are not computed for streaming.
+
+### Fix
+
+1. Add fields to `PowerScoringResult`:
+```python
+iforest_peak_timestep: str = ""
+iforest_top_features: list[str] = field(default_factory=list)
+```
+
+2. In `process_event()`, after `score_iforest_row()`, compute top features from the scaled baseline vector when IF fires:
+```python
+if if_flag:
+    abs_devs = np.abs(b_scaled)
+    col_indices = self._scorer._arts.iforest_col_indices.get(
+        event.device_category, list(range(len(BASELINE_UPS_FEATURES)))
+    )
+    cat_cols = self._scorer.iforest_feature_cols.get(event.device_category, list(BASELINE_UPS_FEATURES))
+    top_idx = np.argsort(abs_devs)[::-1]
+    iforest_top_features = [
+        list(BASELINE_UPS_FEATURES)[j]
+        for j in top_idx[:5]
+        if abs_devs[j] > 0.5
+        and list(BASELINE_UPS_FEATURES)[j] not in ATTRIBUTION_EXCLUDE
+        and list(BASELINE_UPS_FEATURES)[j] in cat_cols
+    ][:3]
+    iforest_peak_timestep = str(event.timestamp)
+```
+
+3. Update `to_dual_result()` to map the new fields through.
+
+Consider extracting the top-feature attribution logic from `run_csv_detection()` into a helper on `DualModelScorer` to avoid duplication between CSV and streaming paths.
+
+### Validation
+```bash
+# Check that SUSPECTED/CONFIRMED results in kafka_power_results.jsonl have non-empty
+# iforest_peak_timestep and iforest_top_features when IF fires
+python3 -m snmp_anomaly_detection detect-power-csv
+# Confirm anomaly_windows_detail.json iforest.top_features is populated for IF-flagged windows
 ```
 
 ---

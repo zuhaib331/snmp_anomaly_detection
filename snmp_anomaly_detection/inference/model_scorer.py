@@ -263,6 +263,29 @@ class DualModelScorer:
         flag = int(score < threshold and score_ratio >= IF_MIN_SCORE_RATIO)
         return score, threshold, flag
 
+    def get_iforest_top_features(
+        self,
+        b_scaled_row: np.ndarray,
+        device_category: str,
+        baseline_cols: list[str],
+    ) -> list[str]:
+        """Return the top-3 contributing features for one IF-scored row.
+
+        Uses absolute scaled-value magnitude as a proxy for surprise, filtered
+        to the category's active feature mask and the global ATTRIBUTION_EXCLUDE set.
+        """
+        cat_cols = self._arts.iforest_feature_cols.get(device_category, baseline_cols)
+        abs_devs = np.abs(b_scaled_row)
+        top_idx = np.argsort(abs_devs)[::-1]
+        return [
+            baseline_cols[j]
+            for j in top_idx[:5]
+            if j < len(baseline_cols)
+            and abs_devs[j] > 0.5
+            and baseline_cols[j] not in ATTRIBUTION_EXCLUDE
+            and baseline_cols[j] in cat_cols
+        ][:3]
+
     def score_iforest_batch(
         self,
         baseline_vals: np.ndarray,
@@ -435,15 +458,9 @@ def run_csv_detection(
                 if_threshold = device_if_threshold
                 score_ratio = (if_score / if_threshold) if if_threshold != 0 else 0.0
                 if_flag = int(if_score < if_threshold and score_ratio >= IF_MIN_SCORE_RATIO)
-                abs_devs = np.abs(baseline_vals[i + if_peak_idx])
-                top_idx = np.argsort(abs_devs)[::-1]
-                if_top_features = [
-                    baseline_cols[j]
-                    for j in top_idx[:5]
-                    if abs_devs[j] > 0.5
-                    and baseline_cols[j] not in ATTRIBUTION_EXCLUDE
-                    and baseline_cols[j] in device_if_cat_cols
-                ][:3]
+                if_top_features = scorer.get_iforest_top_features(
+                    baseline_vals[i + if_peak_idx], device_category, baseline_cols
+                )
 
             overload_rule = 0
             if raw_load_pct is not None:
