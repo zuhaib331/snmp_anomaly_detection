@@ -11,7 +11,6 @@ from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, ProjectPaths
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
 from snmp_anomaly_detection.evaluation.time_split import time_based_split
 from snmp_anomaly_detection.preprocessing.power_features import (
-    aggregate_phase_metrics,
     apply_log1p_skewed,
     create_sequences,
     load_power_dataset,
@@ -90,7 +89,6 @@ def evaluate_baseline(
     scaler = joblib.load(scaler_path)
 
     df = load_power_dataset(paths)
-    df = aggregate_phase_metrics(df)
     df = apply_log1p_skewed(df)
     _, _, test_df = time_based_split(df)
 

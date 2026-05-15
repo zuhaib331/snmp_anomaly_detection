@@ -10,49 +10,27 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 # Power SNMP feature column definitions
 # ---------------------------------------------------------------------------
 
-# Aggregated UPS health metrics (baseline model input) — canonical names from OID mapping doc
+# Aggregated UPS health metrics (baseline model input) — derived from Liebert GP MIB OIDs.
+# Raw OID values are normalized in preprocessing/scalar_transforms.py before model input.
+# Registration fields (nominal_voltage_v, rated_battery_v) drive normalization but are not model inputs.
 BASELINE_UPS_FEATURES: tuple[str, ...] = (
-    "battery_charge_pct",
-    "battery_voltage_ratio",      # battery_voltage_v / rated_battery_v — vendor-agnostic
-    "battery_current_ratio",      # battery_current_a / rated_discharge_current — vendor-agnostic
-    "battery_temperature_c",
-    "runtime_remaining_min",
-    "on_battery_status",
-    "battery_replace_status",
-    "input_voltage_dev_pct",      # (input_voltage_v - nominal_voltage_v) / nominal_voltage_v * 100
-    "input_frequency_hz",
-    "output_voltage_dev_pct",     # (output_voltage_v - nominal_voltage_v) / nominal_voltage_v * 100
-    "output_current_ratio",       # output_current_a / (rated_capacity_w / nominal_voltage_v)
-    "output_load_pct",
-    "output_frequency_hz",
-    # output_power_w dropped — redundant with output_load_pct after normalization
-    # Rate-of-change features — capture slow-changing signals within a window
-    # battery_charge_delta omitted: charge changes ~0.02%/step (noise after scaling),
-    # LSTM reconstructs it with MSE=2.37 on normal data → inflates UPS threshold to 43×
-    # battery_charge_pct sequence already gives the LSTM the trend signal implicitly.
-    "runtime_delta",
-    "temperature_delta",
-    "output_load_delta",
+    "battery_charge_pct",         # direct: lgpPwrBatteryCapacity.0
+    "battery_voltage_ratio",      # derived: battery_voltage_v / rated_battery_v
+    "battery_temperature_c",      # direct: lgpPwrDcMeasurementPointTemp
+    "runtime_remaining_min",      # direct: lgpPwrBatteryTimeRemaining (log1p applied)
+    "bypass_flag",                # direct: lgpPwrOutputToLoadOnBypass
+    "input_voltage_dev_pct",      # derived: (input_voltage_v - nominal_voltage_v) / nominal_voltage_v * 100
+    "input_frequency_hz",         # direct: lgpPwrMeasurementPointFrequency.1
+    "output_voltage_dev_pct",     # derived: (output_voltage_v - nominal_voltage_v) / nominal_voltage_v * 100
+    "output_load_pct",            # direct: lgpPwrMeasurementPointVAPercent
+    "output_frequency_hz",        # direct: lgpPwrMeasurementPointFrequency.3
+    "runtime_delta",              # derived: signed log1p diff of runtime_remaining_min
+    "temperature_delta",          # derived: signed log1p diff of battery_temperature_c
+    "output_load_delta",          # derived: signed log1p diff of output_load_pct
 )
 
-# Per-phase raw metrics (phase-level model input) — superset of BASELINE_UPS_FEATURES
-PHASE_LEVEL_FEATURES: tuple[str, ...] = BASELINE_UPS_FEATURES + (
-    "input_voltage_l1",
-    "input_voltage_l2",
-    "input_voltage_l3",
-    "input_current_l1",
-    "input_current_l2",
-    "input_current_l3",
-    "output_current_l1",
-    "output_current_l2",
-    "output_current_l3",
-    "voltage_imbalance_pct",
-    "current_skew_pct",
-    # B3: voltage drop rate-of-change — amplifies phase sag signal diluted in global MSE
-    "voltage_drop_delta_l1",
-    "voltage_drop_delta_l2",
-    "voltage_drop_delta_l3",
-)
+# Phase model disabled — PHASE_LEVEL_FEATURES kept as alias so any stale import does not break.
+PHASE_LEVEL_FEATURES: tuple[str, ...] = BASELINE_UPS_FEATURES
 
 # Features used for battery RUL forecasting
 BATTERY_RUL_FEATURES: tuple[str, ...] = (
@@ -72,7 +50,7 @@ BATTERY_RUL_FEATURES: tuple[str, ...] = (
 # Long-term these will become capability flags on PowerDeviceProfile (see A1).
 # ---------------------------------------------------------------------------
 BASELINE_MODEL_CATEGORIES: frozenset[str] = frozenset({"ups", "pdu", "network", "env"})
-PHASE_MODEL_CATEGORIES: frozenset[str] = frozenset({"ups"})
+PHASE_MODEL_CATEGORIES: frozenset[str] = frozenset()   # phase model disabled
 BATTERY_RUL_CATEGORIES: frozenset[str] = frozenset({"ups"})
 
 # Features excluded from IForest training and scoring per device category.
@@ -80,11 +58,11 @@ BATTERY_RUL_CATEGORIES: frozenset[str] = frozenset({"ups"})
 # isolation tree splits and shift the score distribution, producing false positives.
 # output_frequency_hz is excluded for non-UPS for the same reason the LSTM excludes
 # it from MSE: grid noise (~50/60 Hz ± tiny variation) is not a fault signal.
+# battery_voltage_ratio and bypass_flag are always 0 for non-UPS/PDU devices —
+# constant zeros corrupt isolation tree splits and shift IF score distributions.
 _IF_BATTERY_FEATURES: frozenset[str] = frozenset({
     "battery_voltage_ratio",
-    "battery_current_ratio",
-    "on_battery_status",
-    "battery_replace_status",
+    "bypass_flag",
 })
 
 IF_EXCLUDED_FEATURES: dict[str, frozenset[str]] = {

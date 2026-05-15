@@ -27,7 +27,6 @@ def _import_power_steps() -> dict:
     )
     from snmp_anomaly_detection.preprocessing.power_features import main as preprocess_power_main
     from snmp_anomaly_detection.training.train_baseline_power import main as train_baseline_main
-    from snmp_anomaly_detection.training.train_phase_model import main as train_phase_main
     from snmp_anomaly_detection.training.train_battery_rul import main as train_rul_main
     from snmp_anomaly_detection.training.train_iforest_power import main as train_iforest_main
     from snmp_anomaly_detection.evaluation.power_eval import main as evaluate_baseline_main
@@ -50,7 +49,6 @@ def _import_power_steps() -> dict:
         "generate-power-data": _generate_power_data,
         "preprocess-power": preprocess_power_main,
         "train-power-baseline": train_baseline_main,
-        "train-power-phase": train_phase_main,
         "train-battery-rul": train_rul_main,
         "train-power-iforest": train_iforest_main,
         "evaluate-power-baseline": evaluate_baseline_main,

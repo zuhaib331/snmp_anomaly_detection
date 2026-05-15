@@ -123,7 +123,7 @@ class PowerDeviceProfile:
     device_category: str           # ups | pdu | network | env
     vendor: str                    # for logging only — does not drive data generation logic
     phase_count: int               # 1 or 3
-    rated_capacity_w: float        # nameplate rating in Watts
+    rated_capacity_va: float       # nameplate apparent-power rating in VA
     nominal_voltage_v: float       # 120.0 (US/Japan) or 230.0 (Europe/Asia) — explicit, not inferred from vendor
     battery_ah: float              # Amp-hour capacity (UPS only; 0 for non-UPS)
     rated_battery_v: float         # nominal battery string voltage (UPS only; 0 for non-UPS)
@@ -145,8 +145,8 @@ class PowerDatasetConfig:
 # rated_battery_v: 24V (≤3 kW), 48V (5 kW), 96V (7.5 kW), 120V (10 kW 3Φ), 192V (15 kW 3Φ)
 _DEFAULT_POWER_PROFILES: list[PowerDeviceProfile] = [
     # ── UPS: 1 kW / 120 V / single-phase ──────────────────────────────────
-    PowerDeviceProfile("ups_1kw_120v_a", "ups", "generic", 1, 1000.0, 120.0,  7.2, 24.0, 3.0,   90.0),
-    PowerDeviceProfile("ups_1kw_120v_b", "ups", "generic", 1, 1000.0, 120.0,  7.2, 24.0, 3.0,  720.0),
+    PowerDeviceProfile("ups_1kw_120v_a", "ups", "liebert", 1, 1000.0, 120.0,  7.2, 24.0, 3.0,   90.0),
+    PowerDeviceProfile("ups_1kw_120v_b", "ups", "liebert", 1, 1000.0, 120.0,  7.2, 24.0, 3.0,  720.0),
     # ── UPS: 3 kW / 120 V / single-phase ──────────────────────────────────
     PowerDeviceProfile("ups_3kw_120v_a", "ups", "apc",     1, 3000.0, 120.0,  7.2, 24.0, 3.0,   90.0),
     PowerDeviceProfile("ups_3kw_120v_b", "ups", "apc",     1, 3000.0, 120.0,  7.2, 24.0, 3.0,  365.0),
@@ -171,10 +171,10 @@ _DEFAULT_POWER_PROFILES: list[PowerDeviceProfile] = [
     PowerDeviceProfile("pdu_7k2_230v", "pdu", "raritan", 1,  7200.0, 230.0, 0.0, 0.0, 0.0, 0.0),
     PowerDeviceProfile("pdu_14k_230v", "pdu", "raritan", 3, 14400.0, 230.0, 0.0, 0.0, 0.0, 0.0),
     # ── Network PSUs ──────────────────────────────────────────────────────
-    PowerDeviceProfile("net_200w_120v", "network", "cisco",   1, 200.0, 120.0, 0.0, 0.0, 0.0, 0.0),
-    PowerDeviceProfile("net_150w_120v", "network", "generic", 1, 150.0, 120.0, 0.0, 0.0, 0.0, 0.0),
+    PowerDeviceProfile("net_200w_120v", "network", "liebert", 1, 200.0, 120.0, 0.0, 0.0, 0.0, 0.0),
+    PowerDeviceProfile("net_150w_120v", "network", "liebert", 1, 150.0, 120.0, 0.0, 0.0, 0.0, 0.0),
     # ── Environmental sensor ──────────────────────────────────────────────
-    PowerDeviceProfile("env_5w_120v", "env", "generic", 1, 5.0, 120.0, 0.0, 0.0, 0.0, 0.0),
+    PowerDeviceProfile("env_5w_120v", "env", "liebert", 1, 5.0, 120.0, 0.0, 0.0, 0.0, 0.0),
 ]
 
 
@@ -213,16 +213,6 @@ def _battery_degradation_factor(install_age_days: float, expected_life_years: fl
     return float(np.clip(1.0 - 0.5 * age_fraction, 0.1, 1.0))
 
 
-def _phase_voltages(nominal_v: float, phase_count: int) -> tuple[float, float, float]:
-    """Return (l1, l2, l3) voltages; for single-phase l2==l3==l1."""
-    l1 = nominal_v + np.random.normal(0, 1.0)
-    if phase_count == 1:
-        return (l1, l1, l1)
-    # Three-phase: small independent variation per phase
-    l2 = nominal_v + np.random.normal(0, 1.2)
-    l3 = nominal_v + np.random.normal(0, 1.2)
-    return (l1, l2, l3)
-
 
 def _inject_power_anomaly(
     row: dict,
@@ -235,7 +225,6 @@ def _inject_power_anomaly(
     event: pre-sampled event parameters (add_load, max_temp_rise, drain_amount).
     Overload uses additive injection so that even low-background timesteps produce
     clearly above-normal load values, giving the LSTM a strong learnable signature.
-    All other fault types apply full-strength injection uniformly throughout the event.
     """
     nominal_v = profile.nominal_voltage_v
 
@@ -245,31 +234,13 @@ def _inject_power_anomaly(
         row["runtime_remaining_min"] = _runtime_estimate(
             profile.battery_ah, row["battery_charge_pct"], row["output_power_w"]
         )
-        row["on_battery_status"] = 1.0
         row["battery_current_a"] = -float(row["output_power_w"] / max(row["battery_voltage_v"], 1.0))
 
     elif anomaly_type == "overload":
-        # Additive injection: background load + fixed addition guarantees load is always
-        # significantly above normal regardless of the circadian baseline at injection time.
         add_load = event.add_load if event else random.uniform(40, 70)
         row["output_load_pct"] = float(np.clip(row["output_load_pct"] + add_load, 0, 120))
-        row["output_power_w"] = float(row["output_load_pct"] / 100.0 * profile.rated_capacity_w)
-        load_ratio = row["output_load_pct"] / max(row["output_load_pct"] - add_load, 1.0)
-        for ph in ("l1", "l2", "l3"):
-            if f"output_current_{ph}" in row:
-                row[f"output_current_{ph}"] *= load_ratio
+        row["output_power_w"] = float(row["output_load_pct"] / 100.0 * profile.rated_capacity_va)
         row["output_current_a"] = float(row["output_power_w"] / max(row.get("output_voltage_v", nominal_v) * 0.95, 1.0))
-
-    elif anomaly_type == "phase_sag":
-        row["input_voltage_l1"] = float(row["input_voltage_l1"] * random.uniform(0.6, 0.8))
-        avg = (row["input_voltage_l1"] + row["input_voltage_l2"] + row["input_voltage_l3"]) / 3
-        if avg > 0:
-            row["voltage_imbalance_pct"] = (
-                max(abs(row["input_voltage_l1"] - avg),
-                    abs(row["input_voltage_l2"] - avg),
-                    abs(row["input_voltage_l3"] - avg)) / avg * 100
-            )
-        row["output_voltage_v"] = float(row.get("output_voltage_v", nominal_v) * random.uniform(0.92, 0.98))
 
     elif anomaly_type == "thermal_runaway":
         temp_rise = event.max_temp_rise if event else random.uniform(15, 35)
@@ -284,7 +255,6 @@ def _inject_power_anomaly(
         row["output_voltage_v"] = 0.0
         row["output_frequency_hz"] = 0.0
         row["battery_current_a"] = 0.0
-        row["on_battery_status"] = 1.0
         row["bypass_flag"] = 1.0
 
     return row
@@ -292,9 +262,9 @@ def _inject_power_anomaly(
 
 def _anomaly_types_for_category(category: str) -> list[str]:
     if category == "ups":
-        return ["battery_drain", "overload", "phase_sag", "thermal_runaway", "psu_failure"]
+        return ["battery_drain", "overload", "thermal_runaway", "psu_failure"]
     if category == "pdu":
-        return ["overload", "phase_sag", "psu_failure"]
+        return ["overload", "psu_failure"]
     if category == "network":
         return ["overload", "thermal_runaway", "psu_failure"]
     return ["overload"]
@@ -306,7 +276,6 @@ _EVENT_DURATION_RANGE: dict[str, tuple[int, int]] = {
     "overload":        (30, 60),
     "thermal_runaway": (24, 48),
     "battery_drain":   (12, 24),
-    "phase_sag":       (10, 20),
     "psu_failure":     (6,  12),
 }
 _AVG_EVENT_DURATION = 25  # approximate mean across types, used for rate calibration
@@ -329,7 +298,6 @@ def _generate_anomaly_events(
     total_points: int,
     anomaly_probability: float,
     device_category: str,
-    phase_count: int,
 ) -> list[_AnomalyEvent]:
     """Pre-generate non-overlapping multi-timestep anomaly events for one device.
 
@@ -343,8 +311,6 @@ def _generate_anomaly_events(
     while t < total_points:
         if random.random() < event_probability:
             anomaly_type = random.choice(_anomaly_types_for_category(device_category))
-            if anomaly_type == "phase_sag" and phase_count == 1:
-                anomaly_type = "overload"
             min_dur, max_dur = _EVENT_DURATION_RANGE[anomaly_type]
             duration = random.randint(min_dur, max_dur)
             end = min(t + duration, total_points)
@@ -356,7 +322,6 @@ def _generate_anomaly_events(
                 max_temp_rise=random.uniform(15, 35) if anomaly_type == "thermal_runaway" else 0.0,
                 drain_amount=random.uniform(40, 70) if anomaly_type == "battery_drain" else 0.0,
             ))
-            # Skip ahead past the event plus a minimum quiet gap
             t = end + random.randint(6, 24)
         else:
             t += 1
@@ -374,60 +339,37 @@ def _build_power_row(
     """Build one power SNMP row; returns the row dict and updated charge_pct."""
     load_factor = _circadian_load_factor(timestep, config.interval_minutes)
     load_pct = float(np.clip(load_factor * 100 + np.random.normal(0, 2), 5, 100))
-    output_power_w = load_pct / 100.0 * profile.rated_capacity_w
+    output_power_w = load_pct / 100.0 * profile.rated_capacity_va
 
     # Battery metrics (UPS only; PDU/network/env get neutral values)
-    deg = 1.0  # capacity degradation factor — overwritten for UPS below
+    deg = 1.0
     charge_delta = 0.0
     if profile.battery_ah > 0:
         deg = _battery_degradation_factor(
             profile.install_age_days + timestep * config.interval_minutes / 1440,
             profile.battery_expected_life_years,
         )
-        # Slow trickle charge during low-load periods; slight discharge otherwise
         charge_delta = 0.02 if load_pct < 40 else -0.01
         charge_pct = float(np.clip(charge_pct + charge_delta + np.random.normal(0, 0.05), 0, 100))
         effective_charge = charge_pct * deg
         batt_voltage = _battery_voltage_from_charge(effective_charge, profile.rated_battery_v)
         batt_temp = 25.0 + load_factor * 8 + np.random.normal(0, 0.5)
         runtime_min = _runtime_estimate(profile.battery_ah, effective_charge, output_power_w, profile.rated_battery_v)
+        battery_current_a = float(profile.battery_ah * 0.02 + np.random.normal(0, 0.05))
     else:
         charge_pct = 100.0
         batt_voltage = 0.0
         batt_temp = 20.0 + np.random.normal(0, 0.3)
         runtime_min = 0.0
+        battery_current_a = 0.0
 
-    # Nominal input voltage comes from the explicit profile field (not inferred from vendor)
     nominal_input_v = profile.nominal_voltage_v
-    l1, l2, l3 = _phase_voltages(nominal_input_v, profile.phase_count)
-    avg_v = (l1 + l2 + l3) / 3
-    vol_imbalance = (max(abs(l1 - avg_v), abs(l2 - avg_v), abs(l3 - avg_v)) / avg_v * 100
-                     if avg_v > 0 else 0.0)
-
-    # Per-phase currents (P = V * I * PF; assume PF=0.95)
-    pf = 0.95
-    phase_power = output_power_w / profile.phase_count
-    i_l1 = phase_power / (l1 * pf) if l1 > 0 else 0.0
-    i_l2 = phase_power / (l2 * pf) if l2 > 0 else 0.0
-    i_l3 = phase_power / (l3 * pf) if l3 > 0 else 0.0
-    avg_i = (i_l1 + i_l2 + i_l3) / 3
-    cur_skew = (max(abs(i_l1 - avg_i), abs(i_l2 - avg_i), abs(i_l3 - avg_i)) / avg_i * 100
-                if avg_i > 0 else 0.0)
-
-    # charge_rate: percentage points per interval (positive = charging)
-    charge_rate = charge_delta + np.random.normal(0, 0.02)
-
-    # --- New canonical features ---
-    # battery_current_a: positive = trickle charging (mains), negative = discharging (on battery)
-    battery_current_a = float(profile.battery_ah * 0.02 + np.random.normal(0, 0.05)) if profile.battery_ah > 0 else 0.0
-    # battery_replace_status: 1 when degradation drops below 60% of rated capacity
-    battery_replace_status = 1.0 if (profile.battery_ah > 0 and deg < 0.6) else 0.0
-    # output_voltage_v: inverter/bypass output voltage (close to nominal with slight noise)
+    input_voltage_v = float(nominal_input_v + np.random.normal(0, 1.0))
     output_voltage_v = float(nominal_input_v + np.random.normal(0, 1.0))
-    # output_frequency_hz: output AC frequency (inverter tracks input; slight independent noise)
-    output_frequency_hz = float(50.0 + np.random.normal(0, 0.02))
-    # output_current_a: aggregate AC output current = P / (V * PF)
+    pf = 0.95
+    input_current_a = float(output_power_w / max(input_voltage_v * pf, 1.0))
     output_current_a = float(output_power_w / max(output_voltage_v * pf, 1.0))
+    output_frequency_hz = float(50.0 + np.random.normal(0, 0.02))
 
     row: dict = {
         "timestamp": timestamp,
@@ -435,48 +377,28 @@ def _build_power_row(
         "device_category": profile.device_category,
         "vendor": profile.vendor,
         "phase_count": profile.phase_count,
-        # Device registration constants — used by normalize_absolute_features() in preprocessing.
-        # In production these come from SNMP discovery or device registration (not computed here).
-        "rated_capacity_w": profile.rated_capacity_w,
+        # Device registration constants — not model inputs; drive preprocessing normalization.
+        # In production these come from SNMP discovery or device registration.
+        "rated_capacity_va": profile.rated_capacity_va,
         "nominal_voltage_v": profile.nominal_voltage_v,
         "rated_battery_v": profile.rated_battery_v,
-        # BASELINE_UPS_FEATURES — canonical names
-        "battery_charge_pct": round(charge_pct, 2),
-        "battery_voltage_v": round(batt_voltage, 3),
-        "battery_current_a": round(battery_current_a, 3),
-        "battery_temperature_c": round(batt_temp, 2),
-        "runtime_remaining_min": round(runtime_min, 1),
-        "on_battery_status": 0.0,
-        "battery_replace_status": battery_replace_status,
-        "input_voltage_v": round(avg_v, 2),
-        "input_frequency_hz": round(50.0 + np.random.normal(0, 0.02), 3),
+        # Raw SNMP sensor readings (pre-normalization)
+        "input_voltage_v": round(input_voltage_v, 2),
         "output_voltage_v": round(output_voltage_v, 2),
+        "input_current_a": round(input_current_a, 3),
         "output_current_a": round(output_current_a, 3),
         "output_load_pct": round(load_pct, 2),
+        "input_frequency_hz": round(50.0 + np.random.normal(0, 0.02), 3),
         "output_frequency_hz": round(output_frequency_hz, 3),
         "output_power_w": round(output_power_w, 1),
-        # metadata (not a model feature)
         "bypass_flag": 0.0,
-        # PHASE_LEVEL_FEATURES additions
-        "input_voltage_l1": round(l1, 2),
-        "input_voltage_l2": round(l2, 2),
-        "input_voltage_l3": round(l3, 2),
-        "input_current_l1": round(i_l1, 3),
-        "input_current_l2": round(i_l2, 3),
-        "input_current_l3": round(i_l3, 3),
-        "output_current_l1": round(i_l1, 3),
-        "output_current_l2": round(i_l2, 3),
-        "output_current_l3": round(i_l3, 3),
-        "voltage_imbalance_pct": round(vol_imbalance, 3),
-        "current_skew_pct": round(cur_skew, 3),
-        # BATTERY_RUL_FEATURES extras
-        "charge_rate": round(charge_rate, 4),
-        "discharge_cycles_approx": round(discharge_cycles, 2),
-        # Device metadata — used by derive_rul_labels; not a model feature
-        "install_age_days": profile.install_age_days,
-        # Label
+        "battery_current_a": round(battery_current_a, 3),
+        "battery_voltage_v": round(batt_voltage, 3),
+        "battery_charge_pct": round(charge_pct, 2),
+        "runtime_remaining_min": round(runtime_min, 1),
+        "battery_temperature_c": round(batt_temp, 2),
+        # Training label — 0=normal / 1=fault; not exposed in inference reports.
         "anomaly": 0,
-        "anomaly_type": "none",
     }
     return row, charge_pct
 
@@ -504,7 +426,6 @@ def build_power_dataset(
             config.total_points,
             config.anomaly_probability,
             profile.device_category,
-            profile.phase_count,
         )
         # Build a fast lookup: timestep → event
         timestep_to_event: dict[int, _AnomalyEvent] = {}
@@ -521,7 +442,6 @@ def build_power_dataset(
                 ev = timestep_to_event[timestep]
                 row = _inject_power_anomaly(row, ev.anomaly_type, profile, ev)
                 row["anomaly"] = 1
-                row["anomaly_type"] = ev.anomaly_type
 
             rows.append(row)
             current_time += timedelta(minutes=config.interval_minutes)

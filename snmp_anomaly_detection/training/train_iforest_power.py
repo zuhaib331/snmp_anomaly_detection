@@ -15,7 +15,6 @@ from sklearn.ensemble import IsolationForest
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, IF_EXCLUDED_FEATURES, ProjectPaths
 from snmp_anomaly_detection.preprocessing.power_features import (
     load_power_dataset,
-    aggregate_phase_metrics,
     normalize_absolute_features,
     apply_log1p_skewed,
     add_delta_features,
@@ -28,7 +27,6 @@ def train_iforest_power(paths: ProjectPaths | None = None) -> dict:
     paths.ensure_power_directories()
 
     df = load_power_dataset(paths)
-    df = aggregate_phase_metrics(df)
     df = normalize_absolute_features(df)
     df = apply_log1p_skewed(df)
     df = add_delta_features(df)

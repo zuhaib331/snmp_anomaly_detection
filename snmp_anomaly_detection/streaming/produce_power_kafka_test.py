@@ -196,13 +196,9 @@ def _load_events_from_csv(
 
 def _build_message(row: dict, is_warmup: bool, first_for_device: bool) -> dict:
     """Convert a dataset row into a Kafka message payload."""
-    message = {k: v for k, v in row.items() if k not in ("anomaly", "anomaly_type")}
-    # Replace synthetic 2025-01-01 timestamp with wall-clock time so alert
-    # timestamps match the actual test run and compound-alert timing is accurate.
+    message = {k: v for k, v in row.items() if k not in ("anomaly",)}
     message["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
-    # Evaluation fields: allows TP/FP/FN computation from JSONL output offline.
     message["expected_label"] = int(row.get("anomaly", 0))
-    message["expected_anomaly_type"] = str(row.get("anomaly_type", "none"))
     message["is_warmup"] = is_warmup
     # Signals the consumer to reset per-device delta state from any prior run.
     if first_for_device:

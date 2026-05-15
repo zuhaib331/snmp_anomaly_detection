@@ -1,6 +1,6 @@
 """Feature engineering for the baseline UPS health model.
 
-Loads the power SNMP dataset, derives aggregated metrics, applies scaling,
+Loads the power SNMP dataset, derives vendor-agnostic metrics, applies scaling,
 and builds fixed-length sequences per device for LSTM Autoencoder training.
 """
 from __future__ import annotations
@@ -17,8 +17,6 @@ from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, ProjectPaths
 from snmp_anomaly_detection.preprocessing.scalar_transforms import (
     LOG1P_COLS,
     DELTA_PAIRS,
-    VOLT_DROP_PAIRS,
-    PHASE_V_COLS,
 )
 
 
@@ -29,75 +27,30 @@ def load_power_dataset(paths: ProjectPaths | None = None) -> pd.DataFrame:
     return df.sort_values(["device_id", "timestamp"]).reset_index(drop=True)
 
 
-def add_delta_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute per-device rate-of-change features.
-
-    Must be called AFTER apply_log1p_skewed so runtime_remaining_min is already
-    compressed. signed_log1p squashes extreme delta spikes during anomalies
-    (e.g. battery_charge_pct dropping 97 pts in one step, output_load_pct jumping to 120).
-    temperature_delta and output_load_delta give the LSTM early warning on gradual anomalies.
-
-    Column pairs are defined in scalar_transforms.DELTA_PAIRS and VOLT_DROP_PAIRS
-    so the streaming path (EventPreprocessor) uses the same column names.
-    """
-    df = df.copy()
-    for src, tgt in DELTA_PAIRS:
-        diff = df.groupby("device_id")[src].diff().fillna(0.0)
-        df[tgt] = np.sign(diff) * np.log1p(np.abs(diff))
-    # B3: voltage drop deltas — only negative diffs (drops) kept; rises clamped to 0.
-    # A phase sag only affects 3 of 32 features; clipping to drops amplifies the sag
-    # signal so it is not diluted in the global MSE across all features.
-    if all(c in df.columns for c in PHASE_V_COLS):
-        for src, tgt in VOLT_DROP_PAIRS:
-            drop = df.groupby("device_id")[src].diff().fillna(0.0).clip(upper=0)
-            df[tgt] = np.sign(drop) * np.log1p(np.abs(drop))
-    return df
-
-
-def aggregate_phase_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Recompute input_voltage_v as the mean of per-phase columns when present."""
-    phase_cols = ["input_voltage_l1", "input_voltage_l2", "input_voltage_l3"]
-    if all(c in df.columns for c in phase_cols):
-        df = df.copy()
-        df["input_voltage_v"] = df[phase_cols].mean(axis=1)
-    return df
-
-
 def normalize_absolute_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Replace device-specific absolute values with vendor-agnostic ratios/deviations.
+    """Replace absolute V features with vendor-agnostic ratios and deviations.
 
-    Requires columns: rated_capacity_w, nominal_voltage_v, rated_battery_v (written
-    to the dataset CSV by dataset_builder.py; in production these come from device
-    registration).  The three registration columns are dropped after use.
+    Registration fields required in the dataset CSV:
+      nominal_voltage_v — drives input/output voltage deviation features
+      rated_battery_v   — drives battery_voltage_ratio (0 for non-UPS)
 
-    Call this BEFORE apply_log1p_skewed so ratios are computed on raw values.
+    These columns are dropped after use (not model inputs).
+    Call BEFORE apply_log1p_skewed so ratios are computed on raw values.
     """
     df = df.copy()
-
-    cap  = df["rated_capacity_w"].clip(lower=1.0)
     nomv = df["nominal_voltage_v"].clip(lower=1.0)
 
-    # output_current_a → ratio to rated current at nominal voltage
-    rated_current = cap / nomv
-    df["output_current_ratio"] = df["output_current_a"] / rated_current.clip(lower=0.01)
-
-    # input_voltage_v, output_voltage_v → % deviation from nominal
     df["input_voltage_dev_pct"]  = (df["input_voltage_v"]  - nomv) / nomv * 100.0
     df["output_voltage_dev_pct"] = (df["output_voltage_v"] - nomv) / nomv * 100.0
 
-    # battery_voltage_v → ratio to rated battery string voltage (0 for non-UPS)
     rated_bv = df["rated_battery_v"].clip(lower=1.0)
     df["battery_voltage_ratio"] = df["battery_voltage_v"] / rated_bv
     df.loc[df["rated_battery_v"] == 0, "battery_voltage_ratio"] = 0.0
 
-    # battery_current_a → ratio to rated 10-hour discharge current (C/10 rate)
-    rated_bc = cap / rated_bv.clip(lower=1.0) / 10.0
-    df["battery_current_ratio"] = df["battery_current_a"] / rated_bc.clip(lower=0.01)
-    df.loc[df["rated_battery_v"] == 0, "battery_current_ratio"] = 0.0
-
-    # Drop registration columns (not model inputs) and redundant absolute feature
     df.drop(
-        columns=["rated_capacity_w", "nominal_voltage_v", "rated_battery_v", "output_power_w"],
+        columns=["nominal_voltage_v", "rated_battery_v", "rated_capacity_va",
+                 "input_voltage_v", "output_voltage_v", "battery_voltage_v",
+                 "input_current_a", "output_current_a", "output_power_w"],
         errors="ignore",
         inplace=True,
     )
@@ -105,7 +58,6 @@ def normalize_absolute_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_log1p_skewed(df: pd.DataFrame) -> pd.DataFrame:
-    """Apply log1p to right-skewed columns to reduce scale variance."""
     df = df.copy()
     for col in LOG1P_COLS:
         if col in df.columns:
@@ -113,8 +65,23 @@ def apply_log1p_skewed(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_delta_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-device rate-of-change features.
+
+    Must be called AFTER apply_log1p_skewed so runtime_remaining_min is already
+    log-compressed. signed_log1p squashes extreme delta spikes during anomalies.
+    """
+    df = df.copy()
+    for src, tgt in DELTA_PAIRS:
+        diff = df.groupby("device_id")[src].diff().fillna(0.0)
+        df[tgt] = np.sign(diff) * np.log1p(np.abs(diff))
+    return df
+
+
 def filter_normal_rows(df: pd.DataFrame) -> pd.DataFrame:
-    return df[df["anomaly"] == 0].copy()
+    if "anomaly" in df.columns:
+        return df[df["anomaly"] == 0].copy()
+    return df.copy()
 
 
 def scale_features(
@@ -160,7 +127,6 @@ def run_power_feature_engineering(
     paths.ensure_power_directories()
 
     df = load_power_dataset(paths)
-    df = aggregate_phase_metrics(df)
     df = normalize_absolute_features(df)
     df = apply_log1p_skewed(df)
     df = add_delta_features(df)

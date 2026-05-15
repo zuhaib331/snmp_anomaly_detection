@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, PHASE_LEVEL_FEATURES
+from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES
 
 # Fields that every wire-format payload must carry.
 POWER_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -14,16 +14,13 @@ POWER_REQUIRED_FIELDS: tuple[str, ...] = (
     "vendor",
 )
 
-# Raw (pre-normalization) columns that must be in feature_values so
-# EventPreprocessor.normalize_absolute() can compute vendor-agnostic ratios (B2).
-# These are NOT in BASELINE_UPS_FEATURES / PHASE_LEVEL_FEATURES (those are post-normalization).
-# Any transport building a PowerEvent should include these alongside the model features.
+# Raw (pre-normalization) columns carried in feature_values so EventPreprocessor
+# can compute vendor-agnostic derived features.
+# These are NOT model inputs — they are consumed during preprocessing.
 POWER_RAW_COLS: tuple[str, ...] = (
     "input_voltage_v",
     "output_voltage_v",
-    "output_current_a",
     "battery_voltage_v",
-    "battery_current_a",
 )
 
 
@@ -60,15 +57,11 @@ class PowerEvent:
     vendor: str
     feature_values: dict[str, float]   # canonical feature name → value
     phase_count: int = 1               # 1 (single-phase) or 3 (three-phase)
-    # Device registration constants for B2 normalization.
+    # Device registration constants for normalization.
     # Set from device registration / SNMP discovery at onboarding time.
-    # If rated_capacity_w == 0, normalization falls back to raw values (graceful degradation).
-    rated_capacity_w: float = 0.0      # nameplate power rating in Watts
     nominal_voltage_v: float = 120.0   # nominal input voltage (120 or 230)
     rated_battery_v: float = 0.0       # battery string voltage (0 for non-UPS)
     session_reset: bool = False        # clears stale per-device delta state on new producer run
-    true_label: int = 0                # ground-truth flag from test producer (0 in production)
-    anomaly_type: str = "none"         # ground-truth type from test producer ("none" in production)
 
     @classmethod
     def from_dict(cls, payload: dict) -> PowerEvent | None:
@@ -89,7 +82,7 @@ class PowerEvent:
         except Exception:
             return None
 
-        all_cols = set(BASELINE_UPS_FEATURES) | set(PHASE_LEVEL_FEATURES) | set(POWER_RAW_COLS)
+        all_cols = set(BASELINE_UPS_FEATURES) | set(POWER_RAW_COLS)
         feature_values: dict[str, float] = {}
         for col in all_cols:
             try:
@@ -101,19 +94,13 @@ class PowerEvent:
             timestamp=ts.to_pydatetime(),
             device_id=str(payload["device_id"]),
             device_category=str(payload.get("device_category", "ups")),
-            vendor=str(payload.get("vendor", "generic")),
+            vendor=str(payload.get("vendor", "liebert")),
             feature_values=feature_values,
             phase_count=int(payload.get("phase_count", 1)),
-            rated_capacity_w=float(payload.get("rated_capacity_w", 0.0)),
             nominal_voltage_v=float(payload.get("nominal_voltage_v", 120.0)),
             rated_battery_v=float(payload.get("rated_battery_v", 0.0)),
             session_reset=bool(payload.get("_device_reset", False)),
-            true_label=int(payload.get("expected_label", 0)),
-            anomaly_type=str(payload.get("expected_anomaly_type", "none")),
         )
 
     def get_baseline_vector(self) -> list[float]:
         return [self.feature_values.get(c, 0.0) for c in BASELINE_UPS_FEATURES]
-
-    def get_phase_vector(self) -> list[float]:
-        return [self.feature_values.get(c, 0.0) for c in PHASE_LEVEL_FEATURES]
