@@ -10,7 +10,7 @@ from dataclasses import asdict
 
 from snmp_anomaly_detection.config import KafkaConfig, PowerInferenceConfig, ProjectPaths
 from snmp_anomaly_detection.inference.events import PowerEvent
-from snmp_anomaly_detection.inference.model_scorer import save_dual_results
+from snmp_anomaly_detection.inference.model_scorer import build_window_detail, save_dual_results
 from snmp_anomaly_detection.inference.power_stream_processor import (
     AlertState,
     PowerStreamProcessor,
@@ -19,9 +19,10 @@ from snmp_anomaly_detection.inference.power_stream_processor import (
 )
 
 try:
-    from kafka import KafkaConsumer
+    from kafka import KafkaConsumer, KafkaProducer
 except ImportError:
     KafkaConsumer = None  # type: ignore
+    KafkaProducer = None  # type: ignore
 
 POWER_KAFKA_TOPIC = "snmp-power-events"
 
@@ -44,6 +45,7 @@ def run_power_kafka_detection(
     paths = paths or ProjectPaths()
     paths.ensure_power_directories()
 
+    alerts_topic = kafka_config.power_alerts_topic
     processor = PowerStreamProcessor(inference_config=inference_config, paths=paths)
     consumer = KafkaConsumer(
         POWER_KAFKA_TOPIC,
@@ -53,13 +55,19 @@ def run_power_kafka_detection(
         enable_auto_commit=True,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
     )
+    alert_producer = KafkaProducer(
+        bootstrap_servers=list(kafka_config.bootstrap_servers),
+        value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
+    )
 
     jsonl_file = paths.power_dual_outputs_dir / "kafka_power_results.jsonl"
-    print(f"Listening on topic: {POWER_KAFKA_TOPIC}")
-    print(f"Streaming results : {jsonl_file}")
-    print(f"Reports saved to  : {paths.power_dual_outputs_dir}/ on shutdown\n")
+    print(f"Listening on topic : {POWER_KAFKA_TOPIC}")
+    print(f"Publishing alerts  : {alerts_topic}")
+    print(f"Streaming results  : {jsonl_file}")
+    print(f"Reports saved to   : {paths.power_dual_outputs_dir}/ on shutdown\n")
 
     accumulated_dual = []
+    flagged_count = 0
     with open(jsonl_file, "a") as out_f:
         try:
             while True:
@@ -84,13 +92,26 @@ def run_power_kafka_detection(
                         if result.alert_state == AlertState.SUSPECTED:
                             continue  # provisional — skip accumulation until confirmed
 
-                        accumulated_dual.append(to_dual_result(result))
+                        dual = to_dual_result(result)
+                        accumulated_dual.append(dual)
+
+                        if dual.final_flag:
+                            flagged_count += 1
+                            detail = build_window_detail(dual, window_number=flagged_count)
+                            alert_producer.send(
+                                alerts_topic,
+                                value=detail,
+                                key=dual.device_id.encode(),
+                            )
+
                         if len(accumulated_dual) % 50 == 0:
                             out_f.flush()
                         if len(accumulated_dual) % 100 == 0:
                             save_dual_results(accumulated_dual, paths, silent=True)
         finally:
             consumer.close()
+            alert_producer.flush()
+            alert_producer.close()
             if accumulated_dual:
                 print(f"\nFinal session report ({len(accumulated_dual)} windows scored):")
                 save_dual_results(accumulated_dual, paths)

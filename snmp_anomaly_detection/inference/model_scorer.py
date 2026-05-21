@@ -433,6 +433,50 @@ def _triggered_by(r: DualModelResult) -> str:
     return "unknown"
 
 
+def build_window_detail(r: DualModelResult, window_number: int = 0) -> dict:
+    """Build the per-window anomaly detail dict published to Kafka and written to the JSON file."""
+    b_ratio = round(r.baseline_error / r.baseline_threshold, 2) if r.baseline_threshold else 0.0
+    _total_ts = len(r.window_timestamps)
+    b_breach_ts = [
+        ts for ts, err in zip(r.window_timestamps, r.baseline_timestep_errors)
+        if err > r.baseline_threshold
+    ]
+    top_features_combined = list(dict.fromkeys(
+        r.baseline_top_features + r.iforest_top_features
+    ))[:5]
+    return {
+        "window_number": window_number,
+        "device_id": r.device_id,
+        "device_category": r.device_category,
+        "vendor": r.vendor,
+        "window_start": str(r.window_start),
+        "window_end": str(r.window_end),
+        "triggered_by": _triggered_by(r),
+        "severity": _severity(b_ratio),
+        "top_features": top_features_combined,
+        "baseline": {
+            "error": r.baseline_error,
+            "threshold": r.baseline_threshold,
+            "ratio": b_ratio,
+            "flagged": bool(r.baseline_anomaly),
+            "peak_timestep": str(r.baseline_peak_timestep),
+            "top_features": r.baseline_top_features,
+            "breach_timesteps": [str(ts) for ts in b_breach_ts],
+            "sequence_accuracy_pct": round(
+                (_total_ts - len(b_breach_ts)) / _total_ts * 100, 1
+            ) if _total_ts else 0.0,
+        },
+        "iforest": {
+            "score": r.iforest_score,
+            "threshold": r.iforest_threshold,
+            "score_ratio": round(r.iforest_score / r.iforest_threshold, 2) if r.iforest_threshold else 0.0,
+            "flagged": bool(r.iforest_flag),
+            "peak_timestep": str(r.iforest_peak_timestep),
+            "top_features": r.iforest_top_features,
+        },
+    }
+
+
 def _severity(ratio: float) -> str:
     if ratio >= 3.0:
         return "critical"
@@ -497,50 +541,10 @@ def save_dual_results(results: list[DualModelResult], paths: ProjectPaths, *, si
     with open(paths.power_dual_outputs_dir / "detection_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    detail_rows = []
-    for window_number, r in enumerate(flagged, start=1):
-        b_ratio = round(r.baseline_error / r.baseline_threshold, 2) if r.baseline_threshold else 0.0
-        _total_ts = len(r.window_timestamps)
-        b_breach_ts = [
-            ts for ts, err in zip(r.window_timestamps, r.baseline_timestep_errors)
-            if err > r.baseline_threshold
-        ]
-
-        top_features_combined = list(dict.fromkeys(
-            r.baseline_top_features + r.iforest_top_features
-        ))[:5]
-
-        detail_rows.append({
-            "window_number": window_number,
-            "device_id": r.device_id,
-            "device_category": r.device_category,
-            "vendor": r.vendor,
-            "window_start": r.window_start,
-            "window_end": r.window_end,
-            "triggered_by": _triggered_by(r),
-            "severity": _severity(b_ratio),
-            "top_features": top_features_combined,
-            "baseline": {
-                "error": r.baseline_error,
-                "threshold": r.baseline_threshold,
-                "ratio": b_ratio,
-                "flagged": bool(r.baseline_anomaly),
-                "peak_timestep": r.baseline_peak_timestep,
-                "top_features": r.baseline_top_features,
-                "breach_timesteps": b_breach_ts,
-                "sequence_accuracy_pct": round(
-                    (_total_ts - len(b_breach_ts)) / _total_ts * 100, 1
-                ) if _total_ts else 0.0,
-            },
-            "iforest": {
-                "score": r.iforest_score,
-                "threshold": r.iforest_threshold,
-                "score_ratio": round(r.iforest_score / r.iforest_threshold, 2) if r.iforest_threshold else 0.0,
-                "flagged": bool(r.iforest_flag),
-                "peak_timestep": r.iforest_peak_timestep,
-                "top_features": r.iforest_top_features,
-            },
-        })
+    detail_rows = [
+        build_window_detail(r, window_number=i)
+        for i, r in enumerate(flagged, start=1)
+    ]
 
     detail_path = paths.power_dual_outputs_dir / "anomaly_windows_detail.json"
     with open(detail_path, "w") as f:

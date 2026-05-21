@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -182,14 +183,22 @@ class InferenceConfig:
     save_results: bool = True
 
 
+def _default_bootstrap_servers() -> tuple[str, ...]:
+    env = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
+    if env:
+        return tuple(s.strip() for s in env.split(","))
+    return ("localhost:9092",)
+
+
 @dataclass(frozen=True)
 class KafkaConfig:
-    bootstrap_servers: tuple[str, ...] = ("localhost:9092",)
+    bootstrap_servers: tuple[str, ...] = field(default_factory=_default_bootstrap_servers)
     consumer_group_id: str = "snmp-anomaly-detection"
     poll_timeout_ms: int = 1000
     micro_batch_size: int = 8
     micro_batch_max_wait_ms: int = 50
     save_local_results: bool = True
+    power_alerts_topic: str = "snmp-power-anomaly-windows"
 
 
 # ---------------------------------------------------------------------------
