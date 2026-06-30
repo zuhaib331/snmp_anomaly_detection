@@ -89,16 +89,16 @@ SNMP Poller
 - `live_scoring/api.py`
 - `live_scoring/Dockerfile`
 - `live_scoring/supervisord.conf`
-- `snmp_anomaly_detection/training/dataset_builder.py`  ← new file in existing package
-- `snmp_anomaly_detection/training/deployer.py`         ← new file in existing package
+- `snmp_anomaly_detection/power/training/dataset_builder.py`  ← new file in existing package
+- `snmp_anomaly_detection/power/training/deployer.py`         ← new file in existing package
 - `etl/dags/snmp_ml_retrain.py`
-- Updates to `snmp_anomaly_detection/streaming/detect_power_kafka.py`
+- Updates to `snmp_anomaly_detection/power/streaming/detect_power_kafka.py`
   (add reload_models() + is_ready() only)
 
 **Phase 5:**
 - `docker-compose.yml`
 - `.env.template`
-- Updates to `snmp_anomaly_detection/inference/event_preprocessor.py` (delta gap fix)
+- Updates to `snmp_anomaly_detection/power/inference/event_preprocessor.py` (delta gap fix)
 - Updates to alert state machine (CONFIRMED_IF_ONLY)
 - Updates to `PendingAlert` dataclass (TTL)
 - Updates to rolling window buffer (checkpointing)

@@ -149,10 +149,10 @@ These 6 features go into the **RUL regression model**. They describe battery hea
 | Property | Points to |
 |----------|-----------|
 | `power_dataset_file` | `data/synthetic_power_snmp_dataset.csv` |
-| `power_outputs_dir` | `outputs/power_baseline/` |
-| `power_phase_outputs_dir` | `outputs/power_phase/` |
-| `battery_rul_outputs_dir` | `outputs/battery_rul/` |
-| `power_dual_outputs_dir` | `outputs/power_dual/` |
+| `power_outputs_dir` | `outputs/power/baseline/` |
+| `power_phase_outputs_dir` | `outputs/power/phase/` |
+| `battery_rul_outputs_dir` | `outputs/power/battery_rul/` |
+| `power_dual_outputs_dir` | `outputs/power/dual/` |
 
 **To change where files are saved:** edit `ProjectPaths` in `config.py`.
 
@@ -184,7 +184,7 @@ compound_alert_window_minutes = 10  # UPS+PDU correlation window
 
 ## 3. Data generation
 
-**File:** `snmp_anomaly_detection/data/dataset_builder.py`
+**File:** `snmp_anomaly_detection/power/data/dataset_builder.py`
 **Command:** `python3 main.py generate-power-data`
 
 Since real UPS/PDU SNMP data is not available, we generate synthetic data that
@@ -267,7 +267,7 @@ meaningful when all three phases are the same number).
 
 ## 4. Vendor OID mapping
 
-**File:** `snmp_anomaly_detection/data/vendor_oid_map.py`
+**File:** `snmp_anomaly_detection/power/data/vendor_oid_map.py`
 
 SNMP OID names differ by vendor. APC calls battery charge
 `upsAdvBatteryCapacity`. Liebert calls it `lgpPwrMeasurementOutputLoadPercent`.
@@ -287,7 +287,7 @@ APC_OID_MAP = {
 ### How to use it
 
 ```python
-from snmp_anomaly_detection.data.vendor_oid_map import resolve_to_canonical
+from snmp_anomaly_detection.power.data.vendor_oid_map import resolve_to_canonical
 
 canonical = resolve_to_canonical("apc", "upsAdvBatteryCapacity")
 # returns: "battery_charge_pct"
@@ -300,7 +300,7 @@ Returns `None` for unmapped or internal fields (those starting with `_`).
 Some OIDs return integer codes that need decoding:
 
 ```python
-from snmp_anomaly_detection.data.vendor_oid_map import decode_apc_status_flags
+from snmp_anomaly_detection.power.data.vendor_oid_map import decode_apc_status_flags
 
 flags = decode_apc_status_flags(8)
 # returns: {"on_battery": True, "low_battery": False, "replace_battery": False, ...}
@@ -313,7 +313,7 @@ then add it to the `_ALL_MAPS` lookup inside `resolve_to_canonical()`.
 
 ## 5. Feature engineering — baseline
 
-**File:** `snmp_anomaly_detection/preprocessing/power_features.py`
+**File:** `snmp_anomaly_detection/power/preprocessing/power_features.py`
 **Command:** `python3 main.py preprocess-power`
 
 This file prepares data for the **baseline model** training.
@@ -359,7 +359,7 @@ reconstruction error for anomalies won't be higher than for normal data.
 ```python
 scaled_df, scaler = scale_features(train_df, paths)
 # Fits RobustScaler on the 10 BASELINE_UPS_FEATURES
-# Saves scaler to outputs/power_baseline/baseline_scaler.pkl
+# Saves scaler to outputs/power/baseline/baseline_scaler.pkl
 ```
 
 RobustScaler uses median and IQR instead of mean and std. This makes it resistant
@@ -375,13 +375,13 @@ sequences = build_baseline_sequences(scaled_df, seq_len=10)
 Why sequences? LSTMs need time-ordered inputs. Instead of feeding one row at a time,
 we feed a sliding window of 10 consecutive readings (= 50 minutes of data).
 
-**Output:** `outputs/power_baseline/X_train.npy` — shape (N, 10, 10)
+**Output:** `outputs/power/baseline/X_train.npy` — shape (N, 10, 10)
 
 ---
 
 ## 6. Feature engineering — phase level
 
-**File:** `snmp_anomaly_detection/preprocessing/phase_features.py`
+**File:** `snmp_anomaly_detection/power/preprocessing/phase_features.py`
 
 This prepares data for the **phase model**, which uses 21 features including
 per-phase L1/L2/L3 readings.
@@ -440,7 +440,7 @@ The learning rate for the phase model is also set to `learning_rate × 0.1`
 
 ## 7. Battery RUL feature engineering
 
-**File:** `snmp_anomaly_detection/preprocessing/battery_features.py`
+**File:** `snmp_anomaly_detection/power/preprocessing/battery_features.py`
 
 This prepares data for the **RUL regression model**.
 
@@ -552,7 +552,7 @@ confidence_interval = [mean - 2×std, mean + 2×std]  # ~95%
 
 ## 9. Training — baseline model
 
-**File:** `snmp_anomaly_detection/training/train_baseline_power.py`
+**File:** `snmp_anomaly_detection/power/training/train_baseline_power.py`
 **Command:** `python3 main.py train-power-baseline`
 
 ### Training loop
@@ -591,15 +591,15 @@ threshold = mean(train_errors) + 3 × std(train_errors)
 
 | File | Contains |
 |---|---|
-| `outputs/power_baseline/baseline_model.pt` | PyTorch model weights |
-| `outputs/power_baseline/baseline_metadata.json` | input_size, threshold, training history |
-| `outputs/power_baseline/baseline_scaler.pkl` | fitted RobustScaler (used at inference) |
+| `outputs/power/baseline/baseline_model.pt` | PyTorch model weights |
+| `outputs/power/baseline/baseline_metadata.json` | input_size, threshold, training history |
+| `outputs/power/baseline/baseline_scaler.pkl` | fitted RobustScaler (used at inference) |
 
 ---
 
 ## 10. Training — phase model
 
-**File:** `snmp_anomaly_detection/training/train_phase_model.py`
+**File:** `snmp_anomaly_detection/power/training/train_phase_model.py`
 **Command:** `python3 main.py train-power-phase`
 
 Same structure as baseline training with two differences:
@@ -617,7 +617,7 @@ gradient instability than the simpler baseline feature set.
 
 ## 11. Training — battery RUL model
 
-**File:** `snmp_anomaly_detection/training/train_battery_rul.py`
+**File:** `snmp_anomaly_detection/power/training/train_battery_rul.py`
 **Command:** `python3 main.py train-battery-rul`
 
 ```
@@ -712,7 +712,7 @@ WARN_DAYS   = 30   # replacement needed within 1 month
 
 ## 13. Detection — dual model scorer
 
-**File:** `snmp_anomaly_detection/inference/dual_model_scorer.py`
+**File:** `snmp_anomaly_detection/power/inference/dual_model_scorer.py`
 **Command:** `python3 main.py detect-power-csv`
 
 This is the main detection entry point for batch/CSV-based detection.
@@ -765,7 +765,7 @@ Change `alert_policy` in `PowerInferenceConfig` to switch.
 
 ### Output
 
-`outputs/power_dual/anomaly_results.csv` — one row per detection window:
+`outputs/power/dual/anomaly_results.csv` — one row per detection window:
 
 | Column | Meaning |
 |---|---|
@@ -784,7 +784,7 @@ Change `alert_policy` in `PowerInferenceConfig` to switch.
 
 ## 14. Streaming processor
 
-**File:** `snmp_anomaly_detection/inference/power_stream_processor.py`
+**File:** `snmp_anomaly_detection/power/inference/power_stream_processor.py`
 **Commands:** `python3 main.py detect-power-kafka` / `produce-power-kafka-test`
 
 This extends the master branch's streaming pattern to handle power events.
@@ -944,7 +944,7 @@ preprocess-power
   └─ power_features.py
        load CSV → aggregate_phase_metrics → apply_log1p → filter_normal
        → RobustScaler (fit on train only) → sliding windows
-       → outputs/power_baseline/X_train.npy
+       → outputs/power/baseline/X_train.npy
 
 train-power-baseline
   └─ train_baseline_power.py
@@ -978,7 +978,7 @@ detect-power-csv
          b_flag = baseline_error > baseline_threshold
          p_flag = phase_error > phase_threshold
          combined = b_flag OR p_flag
-       → outputs/power_dual/anomaly_results.csv
+       → outputs/power/dual/anomaly_results.csv
 
 detect-power-kafka  (live)
   └─ power_stream_processor.py

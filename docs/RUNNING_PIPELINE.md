@@ -85,11 +85,11 @@ python3 main.py generate-data
 Using module directly:
 
 ```bash
-python3 -m snmp_anomaly_detection.data.dataset_builder
+python3 -m snmp_anomaly_detection.network.data.dataset_builder
 ```
 
 Output:
-- dataset CSV is saved to `snmp_anomaly_detection/data/synthetic_snmp_dataset.csv`
+- dataset CSV is saved to `snmp_anomaly_detection/network/data/synthetic_snmp_dataset.csv`
 
 ### B. Preprocess dataset
 
@@ -109,11 +109,11 @@ python3 main.py preprocess
 Using module directly:
 
 ```bash
-python3 -m snmp_anomaly_detection.preprocessing.feature_engineering
+python3 -m snmp_anomaly_detection.network.preprocessing.feature_engineering
 ```
 
 Outputs:
-- `snmp_anomaly_detection/utils/scaler.pkl`
+- `snmp_anomaly_detection/outputs/network/scaler.pkl`
 - `snmp_anomaly_detection/outputs/X_train.npy`
 - `snmp_anomaly_detection/outputs/X_test.npy`
 - `snmp_anomaly_detection/outputs/y_train.npy`
@@ -136,7 +136,7 @@ python3 main.py train
 Using module directly:
 
 ```bash
-python3 -m snmp_anomaly_detection.training.train_model
+python3 -m snmp_anomaly_detection.network.training.train_model
 ```
 
 Outputs:
@@ -167,8 +167,8 @@ python3 main.py detect-csv
 Using module directly:
 
 ```bash
-python3 -m snmp_anomaly_detection.inference.detect_anomalies
-python3 -m snmp_anomaly_detection.inference.csv_replay
+python3 -m snmp_anomaly_detection.network.inference.detect_anomalies
+python3 -m snmp_anomaly_detection.network.inference.csv_replay
 ```
 
 Outputs:
@@ -193,7 +193,7 @@ python3 main.py detect-kafka-dry
 Using module directly:
 
 ```bash
-python3 -m snmp_anomaly_detection.streaming.detect_kafka_dry
+python3 -m snmp_anomaly_detection.network.streaming.detect_kafka_dry
 ```
 
 Notes:
@@ -220,7 +220,7 @@ python3 main.py produce-kafka-test-data --max-messages 200 --anomaly-probability
 Using module directly:
 
 ```bash
-python3 -m snmp_anomaly_detection.streaming.produce_kafka_test_data
+python3 -m snmp_anomaly_detection.network.streaming.produce_kafka_test_data
 ```
 
 Notes:
@@ -248,7 +248,7 @@ python3 main.py detect-kafka
 Using module directly:
 
 ```bash
-python3 -m snmp_anomaly_detection.streaming.detect_kafka
+python3 -m snmp_anomaly_detection.network.streaming.detect_kafka
 ```
 
 Notes:
@@ -284,13 +284,13 @@ python3 main.py detect
 ```
 
 Required existing files:
-- `snmp_anomaly_detection/utils/scaler.pkl`
+- `snmp_anomaly_detection/outputs/network/scaler.pkl`
 - `snmp_anomaly_detection/outputs/lstm_autoencoder.pth`
 - `snmp_anomaly_detection/outputs/model_metadata.json`
 - dataset CSV in one of the supported locations
 
 Supported dataset lookup order:
-- `snmp_anomaly_detection/data/synthetic_snmp_dataset.csv`
+- `snmp_anomaly_detection/network/data/synthetic_snmp_dataset.csv`
 - `synthetic_snmp_dataset.csv`
 - `featureEngineering/synthetic_snmp_dataset.csv`
 
@@ -298,8 +298,8 @@ Supported dataset lookup order:
 
 Main outputs are stored here:
 
-- dataset: `snmp_anomaly_detection/data/synthetic_snmp_dataset.csv`
-- scaler: `snmp_anomaly_detection/utils/scaler.pkl`
+- dataset: `snmp_anomaly_detection/network/data/synthetic_snmp_dataset.csv`
+- scaler: `snmp_anomaly_detection/outputs/network/scaler.pkl`
 - training arrays: `snmp_anomaly_detection/outputs/`
 - model: `snmp_anomaly_detection/outputs/lstm_autoencoder.pth`
 - metadata: `snmp_anomaly_detection/outputs/model_metadata.json`
@@ -400,7 +400,7 @@ python3 main.py generate-power-data
 Generates a synthetic multi-vendor power SNMP dataset with 21 device profiles across four categories, 5-minute intervals, and probabilistic anomaly injection (~5% rate).
 
 Output:
-- `snmp_anomaly_detection/data/synthetic_power_snmp_dataset.csv` — 42,336 rows (~7 days per device), 21 devices
+- `snmp_anomaly_detection/power/data/synthetic_power_snmp_dataset.csv` — 42,336 rows (~7 days per device), 21 devices
 
 Device profiles: 14 UPS (generic/apc/eaton/liebert, 1–15 kW, 120 V and 230 V), 4 PDU (apc/raritan), 2 network PSU (cisco/generic), 1 environmental sensor
 
@@ -415,8 +415,8 @@ python3 main.py preprocess-power
 Loads the power dataset, applies log1p to skewed columns (`runtime_remaining_min`, `output_power_w`), fits a RobustScaler on normal-only rows, and builds sliding-window sequences.
 
 Outputs:
-- `snmp_anomaly_detection/outputs/power_baseline/baseline_scaler.pkl`
-- `snmp_anomaly_detection/outputs/power_baseline/X_train.npy`
+- `snmp_anomaly_detection/outputs/power/baseline/baseline_scaler.pkl`
+- `snmp_anomaly_detection/outputs/power/baseline/X_train.npy`
 
 ```bash
 python3 main.py train-power-baseline
@@ -429,8 +429,8 @@ Also computes **per-device-category thresholds** (env/network/pdu/ups) saved in 
 > **B2 normalization:** absolute voltage/current columns replaced by vendor-agnostic ratio/deviation features (`battery_voltage_ratio`, `battery_current_ratio`, `input_voltage_dev_pct`, `output_voltage_dev_pct`, `output_current_ratio`). `output_power_w` and `battery_charge_delta` were dropped. This eliminates 230 V vs 120 V false positives without any changes to the model architecture.
 
 Outputs:
-- `snmp_anomaly_detection/outputs/power_baseline/baseline_model.pt`
-- `snmp_anomaly_detection/outputs/power_baseline/baseline_metadata.json`
+- `snmp_anomaly_detection/outputs/power/baseline/baseline_model.pt`
+- `snmp_anomaly_detection/outputs/power/baseline/baseline_metadata.json`
 
 ```bash
 python3 main.py evaluate-power-baseline
@@ -439,7 +439,7 @@ python3 main.py evaluate-power-baseline
 Runs the baseline model on the held-out test split and reports Precision, Recall, F1.
 
 Output:
-- `snmp_anomaly_detection/outputs/power_baseline/p1_metrics.json`
+- `snmp_anomaly_detection/outputs/power/baseline/p1_metrics.json`
 
 Achieved metrics on synthetic dataset (single-model baseline only):
 
@@ -462,9 +462,9 @@ Also saves per-category thresholds to `phase_metadata.json`.
 > **Important:** `voltage_imbalance_pct` and `current_skew_pct` are clipped to `[0%, 10%]` before RobustScaler. Single-phase devices produce near-zero IQR for these columns which causes RobustScaler to overflow. Clipping to the physical fault ceiling (`10%`) prevents this.
 
 Outputs:
-- `snmp_anomaly_detection/outputs/power_phase/phase_model.pt`
-- `snmp_anomaly_detection/outputs/power_phase/phase_metadata.json`
-- `snmp_anomaly_detection/outputs/power_phase/phase_scaler.pkl`
+- `snmp_anomaly_detection/outputs/power/phase/phase_model.pt`
+- `snmp_anomaly_detection/outputs/power/phase/phase_metadata.json`
+- `snmp_anomaly_detection/outputs/power/phase/phase_scaler.pkl`
 
 ```bash
 python3 main.py train-power-iforest
@@ -474,8 +474,8 @@ Trains one `IsolationForest` (`n_estimators=200`) per device category on normal-
 Battery-specific features (`battery_voltage_ratio`, `battery_current_ratio`, `on_battery_status`, `battery_replace_status`) and `output_frequency_hz` are **excluded** for non-UPS categories — constant zeros in these columns corrupt isolation-tree splits and inflate scores.
 
 Outputs:
-- `snmp_anomaly_detection/outputs/power_dual/iforest_models.pkl` — per-category fitted models
-- `snmp_anomaly_detection/outputs/power_dual/iforest_metadata.json` — per-category thresholds and feature column lists
+- `snmp_anomaly_detection/outputs/power/dual/iforest_models.pkl` — per-category fitted models
+- `snmp_anomaly_detection/outputs/power/dual/iforest_metadata.json` — per-category thresholds and feature column lists
 
 Borderline IF flags are suppressed by a ratio guard (`IF_MIN_SCORE_RATIO = 1.05`): the IF score must be at least 5% below the threshold — filters false positives that cluster at ratio 1.00–1.10 on normal data.
 
@@ -496,9 +496,9 @@ Runs the **four-signal scorer** on the full CSV dataset:
 > **Implementation note:** `PHASE_LEVEL_FEATURES ⊃ BASELINE_UPS_FEATURES`. Scaling must be done into **separate numpy arrays** — not the same dataframe — to prevent the phase scaler from overwriting the baseline-scaled columns.
 
 Outputs:
-- `snmp_anomaly_detection/outputs/power_dual/anomaly_results.csv` — per-window scores including `final_flag`
-- `snmp_anomaly_detection/outputs/power_dual/detection_summary.json`
-- `snmp_anomaly_detection/outputs/power_dual/anomaly_windows_detail.json` — per-timestep breakdown
+- `snmp_anomaly_detection/outputs/power/dual/anomaly_results.csv` — per-window scores including `final_flag`
+- `snmp_anomaly_detection/outputs/power/dual/detection_summary.json`
+- `snmp_anomaly_detection/outputs/power/dual/anomaly_windows_detail.json` — per-timestep breakdown
 
 Achieved metrics (three-signal OR, 2026-04-27, **pre-B2/B3**):
 
@@ -532,8 +532,8 @@ python3 main.py train-battery-rul
 Trains an LSTM regression model (hidden=64, 2 layers, MC Dropout=0.1) to predict remaining battery life in days. Loss: MSE on RUL labels derived from synthetic install-age data.
 
 Outputs:
-- `snmp_anomaly_detection/outputs/battery_rul/rul_model.pt`
-- `snmp_anomaly_detection/outputs/battery_rul/rul_scaler.pkl`
+- `snmp_anomaly_detection/outputs/power/battery_rul/rul_model.pt`
+- `snmp_anomaly_detection/outputs/power/battery_rul/rul_scaler.pkl`
 
 ```bash
 python3 main.py predict-battery-rul
@@ -545,8 +545,8 @@ Generates per-device RUL predictions with 95% confidence intervals (30 MC Dropou
 - `ok` — predicted RUL >= 30 days
 
 Output:
-- `snmp_anomaly_detection/outputs/battery_rul/rul_predictions.json`
-- `snmp_anomaly_detection/outputs/battery_rul/rul_metrics.json`
+- `snmp_anomaly_detection/outputs/power/battery_rul/rul_predictions.json`
+- `snmp_anomaly_detection/outputs/power/battery_rul/rul_metrics.json`
 
 > **Limitation:** With only 7 days of synthetic data (2,016 timesteps per device), RUL labels vary by at most ~7 days within any training window. MAE of ~1,647 days is expected on this dataset. Meaningful RUL prediction requires months to years of historical battery telemetry.
 
@@ -611,7 +611,7 @@ With random profiles (no flag), the fleet is distributed across categories with 
 
 **Runtime file updates**: all three report files are rewritten after every scored window — you can open them in a viewer while the consumer is running and see results accumulate in real time. On `Ctrl+C` shutdown, a final verbose summary is also printed to the console.
 
-Outputs written to `snmp_anomaly_detection/outputs/power_dual/`:
+Outputs written to `snmp_anomaly_detection/outputs/power/dual/`:
 
 | File | Description |
 |------|-------------|

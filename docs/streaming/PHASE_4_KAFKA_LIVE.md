@@ -40,7 +40,7 @@ Build Kafka ingestion without anomaly scoring first.
 ### Tasks
 
 - Create a Kafka consumer module, for example:
-  - `snmp_anomaly_detection/streaming/kafka_source.py`
+  - `snmp_anomaly_detection/network/streaming/kafka_source.py`
 - Subscribe to the one hardcoded topic
 - Read messages continuously
 - Decode JSON payloads

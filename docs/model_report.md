@@ -349,14 +349,14 @@ PDU detection is perfect — Raritan PDU (`pdu_7k2_230v`) flagged exactly the 23
 
 | Artifact | Path |
 |---|---|
-| Baseline model weights | `snmp_anomaly_detection/outputs/power_dual/baseline_model.pt` |
-| Baseline metadata + thresholds | `snmp_anomaly_detection/outputs/power_dual/baseline_metadata.json` |
-| Baseline scaler | `snmp_anomaly_detection/outputs/power_dual/baseline_scaler.pkl` |
-| Phase model weights | `snmp_anomaly_detection/outputs/power_dual/phase_model.pt` |
-| Phase metadata + thresholds | `snmp_anomaly_detection/outputs/power_dual/phase_metadata.json` |
-| Phase scaler | `snmp_anomaly_detection/outputs/power_dual/phase_scaler.pkl` |
-| RUL model | `snmp_anomaly_detection/outputs/power_dual/rul_model.pt` |
-| Isolation Forest models | `snmp_anomaly_detection/outputs/power_dual/iforest_*.pkl` |
-| Detection results (CSV) | `snmp_anomaly_detection/outputs/power_dual/anomaly_results.csv` |
-| Collapsed events (JSON) | `snmp_anomaly_detection/outputs/power_dual/anomaly_windows_detail.json` |
-| Detection summary | `snmp_anomaly_detection/outputs/power_dual/detection_summary.json` |
+| Baseline model weights | `snmp_anomaly_detection/outputs/power/dual/baseline_model.pt` |
+| Baseline metadata + thresholds | `snmp_anomaly_detection/outputs/power/dual/baseline_metadata.json` |
+| Baseline scaler | `snmp_anomaly_detection/outputs/power/dual/baseline_scaler.pkl` |
+| Phase model weights | `snmp_anomaly_detection/outputs/power/dual/phase_model.pt` |
+| Phase metadata + thresholds | `snmp_anomaly_detection/outputs/power/dual/phase_metadata.json` |
+| Phase scaler | `snmp_anomaly_detection/outputs/power/dual/phase_scaler.pkl` |
+| RUL model | `snmp_anomaly_detection/outputs/power/dual/rul_model.pt` |
+| Isolation Forest models | `snmp_anomaly_detection/outputs/power/dual/iforest_*.pkl` |
+| Detection results (CSV) | `snmp_anomaly_detection/outputs/power/dual/anomaly_results.csv` |
+| Collapsed events (JSON) | `snmp_anomaly_detection/outputs/power/dual/anomaly_windows_detail.json` |
+| Detection summary | `snmp_anomaly_detection/outputs/power/dual/detection_summary.json` |

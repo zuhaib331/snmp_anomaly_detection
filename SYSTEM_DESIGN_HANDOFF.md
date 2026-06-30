@@ -679,10 +679,10 @@ Model storage: shared Docker volume mounted read-write by ML training, read-only
 One service per category. Each is a separate Docker container.
 All share the same codebase — category is passed as an environment variable.
 
-**Existing codebase location:** `snmp_anomaly_detection/streaming/detect_power_kafka.py`
+**Existing codebase location:** `snmp_anomaly_detection/power/streaming/detect_power_kafka.py`
 **Consumer topic confirmed:** `snmp-events-power` — already correct, no change needed.
 **Model paths:** defined in `snmp_anomaly_detection/config.py` — read from there always.
-**Trained seed models:** `snmp_anomaly_detection/outputs/power_baseline/` and `power_dual/`
+**Trained seed models:** `snmp_anomaly_detection/outputs/power/baseline/` and `power/dual/`
 
 Each service:
 - Consumes from its Kafka topic (e.g. snmp-events-power) — already wired
@@ -815,7 +815,7 @@ project_root/                         ← snmp_anomaly_detection/ git repo
 │   ├── requirements.txt
 │   ├── dags/
 │   │   ├── snmp_etl_pipeline.py      ← DAG 1
-│   │   └── snmp_ml_retrain.py        ← DAG 2, imports from snmp_anomaly_detection/training/
+│   │   └── snmp_ml_retrain.py        ← DAG 2, imports from snmp_anomaly_detection/power/training/
 │   ├── extract/
 │   │   └── pg_polling_extractor.py
 │   ├── quality/
@@ -833,16 +833,16 @@ project_root/                         ← snmp_anomaly_detection/ git repo
 │
 └── snmp_anomaly_detection/           ← existing package — minimal changes only
     ├── config.py                     ← model paths — read always, never change
-    ├── streaming/
+    ├── power/streaming/
     │   └── detect_power_kafka.py     ← add reload_models() + is_ready() only
-    ├── training/                     ← DAG 2 imports directly from here
+    ├── power/training/                ← DAG 2 imports directly from here
     │   ├── train_baseline_power.py
     │   └── train_iforest_power.py
-    ├── evaluation/                   ← DAG 2 imports directly from here
+    ├── power/evaluation/              ← DAG 2 imports directly from here
     │   └── power_eval.py
     ├── outputs/                      ← existing trained models = seed models
-    │   ├── power_baseline/
-    │   └── power_dual/
+    │   ├── power/baseline/
+    │   └── power/dual/
     └── ... everything else unchanged
 ```
 

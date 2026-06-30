@@ -24,7 +24,7 @@ Revert `TrainingConfig.threshold_std_multiplier` back to `3.0`. Power models alr
 ## F2 — Fix validation scaler data leakage in `train_baseline_power.py`
 **Status:** Done — 2026-04-29  
 **Priority:** High — validation split is scaled with its own fitted scaler, not the training scaler  
-**File:** [train_baseline_power.py:710](../snmp_anomaly_detection/training/train_baseline_power.py#L710)
+**File:** [train_baseline_power.py:710](../snmp_anomaly_detection/power/training/train_baseline_power.py#L710)
 
 ### Issue
 ```python
@@ -47,7 +47,7 @@ Remove the `baseline_val_scaler.pkl` artifact path.
 ## F3 — Fix `preprocess-power` producing sequences without delta features
 **Status:** Done — 2026-04-29  
 **Priority:** High — `X_train.npy` from `preprocess-power` has 14 features; training uses 16  
-**File:** [power_features.py:727](../snmp_anomaly_detection/preprocessing/power_features.py#L727)
+**File:** [power_features.py:727](../snmp_anomaly_detection/power/preprocessing/power_features.py#L727)
 
 ### Issue
 `run_power_feature_engineering` (invoked by `preprocess-power`) calls:
@@ -64,7 +64,7 @@ Add `df = add_delta_features(df)` after `apply_log1p_skewed` in `run_power_featu
 ## F4 — Fix `derive_rul_labels` ignoring device install age
 **Status:** Done — 2026-04-30 (code fix applied; **RUL model must be retrained** — run `python3 -m snmp_anomaly_detection train-battery-rul` to apply the label fix)  
 **Priority:** High — RUL labels for new and end-of-life batteries are identical at dataset start  
-**File:** [battery_features.py:52](../snmp_anomaly_detection/preprocessing/battery_features.py#L52)
+**File:** [battery_features.py:52](../snmp_anomaly_detection/power/preprocessing/battery_features.py#L52)
 
 ### Issue
 ```python
@@ -85,7 +85,7 @@ age_days = install_age + i * _INTERVAL_MINUTES / 1440
 ## F8 — Fix Battery RUL confidence intervals (MC Dropout CI coverage is 0%)
 **Status:** Done — 2026-04-30 (dropout 0.1→0.3, mc_samples 30→50, retrained after F4 label fix; see F10 for remaining test-split issue)  
 **Priority:** High — `rul_metrics.json` shows `ci_coverage_95pct: 0.0`; all 4 inference predictions cluster at ~173–175 days regardless of device state  
-**File:** [train_battery_rul.py](../snmp_anomaly_detection/training/train_battery_rul.py), [rul_eval.py](../snmp_anomaly_detection/evaluation/rul_eval.py)
+**File:** [train_battery_rul.py](../snmp_anomaly_detection/power/training/train_battery_rul.py), [rul_eval.py](../snmp_anomaly_detection/power/evaluation/rul_eval.py)
 
 ### Issue
 
@@ -132,7 +132,7 @@ After retraining and fix:
 ## F10 — Fix RUL test split: per-device temporal holdout instead of global last-15%
 **Status:** Done — 2026-04-30  
 **Priority:** Medium — global split dumps all sequences from one device into test set, producing misleading metrics; per-device predictions are already accurate (4/5 devices within 15 days)  
-**File:** [train_battery_rul.py](../snmp_anomaly_detection/training/train_battery_rul.py)
+**File:** [train_battery_rul.py](../snmp_anomaly_detection/power/training/train_battery_rul.py)
 
 ### Issue
 
@@ -178,7 +178,7 @@ After this change the test set spans all 5 UPS devices' final windows (RUL from 
 ## F9 — Capability registry for model routing (phase model + RUL gating)
 **Status:** Done — 2026-04-30  
 **Priority:** High — phase model runs on all 16 devices but produces `flagged_phase: 0` for every PDU/network/env window; wastes inference time and pollutes OR policy with dead signal. Hardcoding `if category == "ups"` in inference code does not scale when new device types are onboarded.  
-**Files:** [config.py](../snmp_anomaly_detection/config.py), [dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py), [battery_features.py](../snmp_anomaly_detection/preprocessing/battery_features.py), [rul_eval.py](../snmp_anomaly_detection/evaluation/rul_eval.py)
+**Files:** [config.py](../snmp_anomaly_detection/config.py), [dual_model_scorer.py](../snmp_anomaly_detection/power/inference/dual_model_scorer.py), [battery_features.py](../snmp_anomaly_detection/power/preprocessing/battery_features.py), [rul_eval.py](../snmp_anomaly_detection/power/evaluation/rul_eval.py)
 
 ### Issue
 
@@ -241,7 +241,7 @@ python3 -m snmp_anomaly_detection detect-power-csv
 ## F5 — Expose imbalance constants as public API in `phase_features.py`
 **Status:** Superseded by F11  
 **Priority:** Low — resolved as a side effect of F11: `IMBALANCE_COLS` and `IMBALANCE_CLIP_MAX` will be public constants in `scalar_transforms.py`, imported by all callers  
-**Files:** [dual_model_scorer.py:194](../snmp_anomaly_detection/inference/dual_model_scorer.py#L194), [power_stream_processor.py:371](../snmp_anomaly_detection/inference/power_stream_processor.py#L371)
+**Files:** [dual_model_scorer.py:194](../snmp_anomaly_detection/power/inference/dual_model_scorer.py#L194), [power_stream_processor.py:371](../snmp_anomaly_detection/power/inference/power_stream_processor.py#L371)
 
 No separate action needed — close this when F11 is merged.
 
@@ -250,7 +250,7 @@ No separate action needed — close this when F11 is merged.
 ## F6 — Stop `process_event` from mutating its `PowerEvent` argument
 **Status:** Superseded by F12  
 **Priority:** Low — resolved as a side effect of F12: `EventPreprocessor.process()` copies `event.feature_values` before modifying it, so the caller's dict is never touched  
-**File:** [power_stream_processor.py:498](../snmp_anomaly_detection/inference/power_stream_processor.py#L498)
+**File:** [power_stream_processor.py:498](../snmp_anomaly_detection/power/inference/power_stream_processor.py#L498)
 
 No separate action needed — close this when F12 is merged.
 
@@ -260,7 +260,7 @@ No separate action needed — close this when F12 is merged.
 **Status:** Done — 2026-05-11  
 **Priority:** High — root cause of the CSV/Kafka preprocessing gap; every future transport will diverge again without this foundation  
 **Depends on:** Nothing  
-**Files:** [preprocessing/power_features.py](../snmp_anomaly_detection/preprocessing/power_features.py), [preprocessing/phase_features.py](../snmp_anomaly_detection/preprocessing/phase_features.py)
+**Files:** [preprocessing/power_features.py](../snmp_anomaly_detection/power/preprocessing/power_features.py), [preprocessing/phase_features.py](../snmp_anomaly_detection/power/preprocessing/phase_features.py)
 
 ### Why this task exists
 
@@ -404,7 +404,7 @@ python3 -m snmp_anomaly_detection detect-power-csv
 **Status:** Done — 2026-05-11  
 **Priority:** High — the interface that every transport (Kafka, CSV, MQTT, ZMQ, …) calls; without it each transport remains a hand-rolled copy  
 **Depends on:** F11 (scalar_transforms.py must exist first)  
-**Files:** [inference/event_preprocessor.py](../snmp_anomaly_detection/inference/event_preprocessor.py) ← new file
+**Files:** [inference/event_preprocessor.py](../snmp_anomaly_detection/power/inference/event_preprocessor.py) ← new file
 
 ### What to build
 
@@ -482,7 +482,7 @@ python3 -m compileall snmp_anomaly_detection
 **Status:** Done — 2026-05-11  
 **Priority:** High — closes the CSV/Kafka gap permanently; after this step adding a new transport costs zero preprocessing work  
 **Depends on:** F12 (EventPreprocessor must exist first)  
-**Files:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py), [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+**Files:** [inference/power_stream_processor.py](../snmp_anomaly_detection/power/inference/power_stream_processor.py), [inference/dual_model_scorer.py](../snmp_anomaly_detection/power/inference/dual_model_scorer.py)
 
 ### What to change
 
@@ -516,7 +516,7 @@ The imbalance clipping block in `dual_model_scorer.py` (lines 231–234) is also
 ```bash
 # Run full pipeline before and after — outputs must be byte-identical for CSV path
 python3 -m snmp_anomaly_detection detect-power-csv
-diff outputs/power_dual/anomaly_results_before.csv outputs/power_dual/anomaly_results.csv
+diff outputs/power/dual/anomaly_results_before.csv outputs/power/dual/anomaly_results.csv
 
 # Run Kafka path with synthetic producer
 python3 -m snmp_anomaly_detection detect-power-kafka
@@ -530,7 +530,7 @@ python3 -m snmp_anomaly_detection detect-power-kafka
 **Status:** Done — 2026-05-11  
 **Priority:** Medium — same scoring/windowing logic exists in both `dual_model_scorer.py` and `power_stream_processor.py`; a change to thresholding or alert policy requires two edits  
 **Depends on:** F13 (inference paths must use EventPreprocessor before refactoring scoring)  
-**Files:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py), [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py)
+**Files:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/power/inference/dual_model_scorer.py), [inference/power_stream_processor.py](../snmp_anomaly_detection/power/inference/power_stream_processor.py)
 
 ### Current duplication
 
@@ -593,7 +593,7 @@ python3 -m snmp_anomaly_detection detect-power-kafka  # output unchanged
 **Status:** Done — 2026-05-11 (`dual_model_scorer.py` 21 lines; `detect_power_kafka.py` 102 lines)  
 **Priority:** Medium — once F13 and F14 are done, the transport files should contain only deserialisation; this task removes the last remnants of duplicated logic  
 **Depends on:** F14  
-**Files:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py), [streaming/detect_power_kafka.py](../snmp_anomaly_detection/streaming/detect_power_kafka.py)
+**Files:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/power/inference/dual_model_scorer.py), [streaming/detect_power_kafka.py](../snmp_anomaly_detection/power/streaming/detect_power_kafka.py)
 
 ### Remaining work
 
@@ -603,7 +603,7 @@ python3 -m snmp_anomaly_detection detect-power-kafka  # output unchanged
 - Alert display printing (40+ lines in the event loop) — should move to a shared `format_alert()` helper in `model_scorer.py` or a dedicated `alerts.py`
 - Session reporting and `accumulated_dual` flush management (~20 lines) — could be a shared `SessionReporter` used by any transport
 
-**Gap 4 — `_B2_RAW_COLS` preprocessing knowledge leaks into transport layer** ([detect_power_kafka.py:37](../snmp_anomaly_detection/streaming/detect_power_kafka.py#L37))
+**Gap 4 — `_B2_RAW_COLS` preprocessing knowledge leaks into transport layer** ([detect_power_kafka.py:37](../snmp_anomaly_detection/power/streaming/detect_power_kafka.py#L37))
 
 `_B2_RAW_COLS` lists raw pre-normalization column names (`input_voltage_v`, `battery_voltage_v`, etc.) that the Kafka parser must include in `feature_values` so `EventPreprocessor.normalize_absolute()` can compute ratios. This is preprocessing knowledge that should live in `EventPreprocessor` (e.g., exported as `REQUIRED_RAW_COLS`) or in `PowerEvent`, not in the transport file. A new MQTT/ZMQ transport would need to rediscover and duplicate this list.
 
@@ -647,7 +647,7 @@ python3 -m compileall snmp_anomaly_detection
 ## F16 — Fix type mismatch: `to_dual_result()` passes `str` for `list[str]` top-feature fields
 **Status:** Done — 2026-05-11  
 **Priority:** High — silent type bug causes wrong JSON/CSV output in Kafka streaming reports  
-**File:** [inference/power_stream_processor.py:527](../snmp_anomaly_detection/inference/power_stream_processor.py#L527)
+**File:** [inference/power_stream_processor.py:527](../snmp_anomaly_detection/power/inference/power_stream_processor.py#L527)
 
 ### Issue
 
@@ -693,7 +693,7 @@ python3 -m snmp_anomaly_detection detect-power-csv
 ## F17 — Add `iforest_peak_timestep` and `iforest_top_features` to `PowerScoringResult`
 **Status:** Done — 2026-05-11  
 **Priority:** Medium — IF attribution fields are always empty in Kafka streaming output; NOC alarms lose peak-timestep and top-feature context for IF-triggered alerts  
-**File:** [inference/power_stream_processor.py:67](../snmp_anomaly_detection/inference/power_stream_processor.py#L67)
+**File:** [inference/power_stream_processor.py:67](../snmp_anomaly_detection/power/inference/power_stream_processor.py#L67)
 
 ### Issue
 
@@ -745,7 +745,7 @@ python3 -m snmp_anomaly_detection detect-power-csv
 ## F7 — Replace `battery_voltage_v > 0` UPS proxy with `device_category == "ups"`
 **Status:** Done — 2026-04-30  
 **Priority:** Low — voltage can be 0 during a fault, causing UPS to be silently excluded from RUL scoring  
-**File:** [rul_eval.py:103](../snmp_anomaly_detection/evaluation/rul_eval.py#L103)
+**File:** [rul_eval.py:103](../snmp_anomaly_detection/power/evaluation/rul_eval.py#L103)
 
 ### Fix
 ```python
@@ -763,7 +763,7 @@ ups_df = df[df["device_category"] == "ups"].copy()
 **Depends on:** Nothing (can start immediately)
 
 ### What to build
-Add `DeviceErrorStats` dataclass to [power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py):
+Add `DeviceErrorStats` dataclass to [power_stream_processor.py](../snmp_anomaly_detection/power/inference/power_stream_processor.py):
 
 ```python
 @dataclass
@@ -833,7 +833,7 @@ The real fix is to **replace absolute-value features with ratio/deviation featur
 
 ### Step 1 — Add device registration fields to the CSV (dataset_builder.py)
 
-Two values drive all normalization. They must be written to every CSV row so `power_features.py` can use them at preprocessing time. In [dataset_builder.py:415](../snmp_anomaly_detection/data/dataset_builder.py#L415), add to the `row` dict:
+Two values drive all normalization. They must be written to every CSV row so `power_features.py` can use them at preprocessing time. In [dataset_builder.py:415](../snmp_anomaly_detection/power/data/dataset_builder.py#L415), add to the `row` dict:
 
 ```python
 "rated_capacity_w":   profile.rated_capacity_w,
@@ -845,7 +845,7 @@ In production these values come from MIB discovery or device registration in the
 
 ### Step 2 — New function in power_features.py: `normalize_absolute_features()`
 
-Add this function to [power_features.py](../snmp_anomaly_detection/preprocessing/power_features.py), called **before** `apply_log1p_skewed`:
+Add this function to [power_features.py](../snmp_anomaly_detection/power/preprocessing/power_features.py), called **before** `apply_log1p_skewed`:
 
 ```python
 def normalize_absolute_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -935,7 +935,7 @@ Remove the vendor string from `PowerDeviceProfile` or keep it for logging only �
 
 ### Step 5 — Update `_generate_normal_row` to use nominal_voltage_v, not vendor check
 
-In [dataset_builder.py:223](../snmp_anomaly_detection/data/dataset_builder.py#L223), replace:
+In [dataset_builder.py:223](../snmp_anomaly_detection/power/data/dataset_builder.py#L223), replace:
 ```python
 # Before
 nominal_v = 230.0 if profile.vendor in ("liebert", "raritan") else 120.0
@@ -965,7 +965,7 @@ python3 -m snmp_anomaly_detection detect-power-csv
 # 1. Check normalized feature ranges — all should be in [-3, 3] for normal windows
 python3 - <<'EOF'
 import pandas as pd, numpy as np
-df = pd.read_csv("snmp_anomaly_detection/data/synthetic_power_snmp_dataset.csv")
+df = pd.read_csv("snmp_anomaly_detection/power/data/synthetic_power_snmp_dataset.csv")
 norm_cols = ["output_current_ratio","input_voltage_dev_pct","output_voltage_dev_pct",
              "battery_voltage_ratio","battery_current_ratio"]
 print(df[df["anomaly"]==0][norm_cols].describe().round(3))
@@ -974,7 +974,7 @@ EOF
 # 2. After detect-power-csv, precision should be >90% and FP rate <5% on normal windows
 python3 - <<'EOF'
 import pandas as pd
-df = pd.read_csv("snmp_anomaly_detection/outputs/power_dual/anomaly_results.csv")
+df = pd.read_csv("snmp_anomaly_detection/outputs/power/dual/anomaly_results.csv")
 normal = df[df["true_label"]==0]
 print("FP rate on normal windows:", normal["final_flag"].mean().round(3))
 EOF
@@ -1135,9 +1135,9 @@ snmp_anomaly_detection/collection/oid_resolver.py  ← new file; loads YAML, tri
 ### What was implemented
 
 **Issue 1 — Phase sag recall:** Added `voltage_drop_delta_l1/l2/l3` features using Option A (preferred):
-- [power_features.py](../snmp_anomaly_detection/preprocessing/power_features.py): added drop delta block inside `add_delta_features()` — clips per-device voltage diffs to `upper=0` (only drops produce signal) then applies signed_log1p
+- [power_features.py](../snmp_anomaly_detection/power/preprocessing/power_features.py): added drop delta block inside `add_delta_features()` — clips per-device voltage diffs to `upper=0` (only drops produce signal) then applies signed_log1p
 - [config.py](../snmp_anomaly_detection/config.py): added the 3 new columns to `PHASE_LEVEL_FEATURES`
-- [power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py): added `_VOLT_DROP_SOURCES/_TARGETS` constants and matching computation in `_apply_preprocessing()` so live Kafka inference stays in sync with batch training
+- [power_stream_processor.py](../snmp_anomaly_detection/power/inference/power_stream_processor.py): added `_VOLT_DROP_SOURCES/_TARGETS` constants and matching computation in `_apply_preprocessing()` so live Kafka inference stays in sync with batch training
 
 **Issue 2 — Liebert audit:** Confirmed clean. No separate fault label needed — Liebert phase sag variance is within normal model tolerance.
 
@@ -1158,8 +1158,8 @@ Replace `.jsonl` flat file outputs with a queryable, production-grade columnar s
    ```
 2. Create `snmp_raw` and `anomaly_windows` tables — MergeTree engine, partitioned by month, ordered by `(device_id, timestamp)`.
 3. Set up Kafka Materialized View on `snmp-live-events` and `snmp-power-events` for automatic raw ingestion (no code change to producers).
-4. Modify [detect_kafka.py](../snmp_anomaly_detection/streaming/detect_kafka.py) to write scored windows to ClickHouse via `clickhouse-connect` Python client.
-5. Do the same for [detect_power_kafka.py](../snmp_anomaly_detection/streaming/detect_power_kafka.py) (power pipeline results).
+4. Modify [detect_kafka.py](../snmp_anomaly_detection/network/streaming/detect_kafka.py) to write scored windows to ClickHouse via `clickhouse-connect` Python client.
+5. Do the same for [detect_power_kafka.py](../snmp_anomaly_detection/power/streaming/detect_power_kafka.py) (power pipeline results).
 6. Connect Grafana to ClickHouse — dashboards: anomaly rate per device, RUL trend, per-category heatmap.
 
 ### New dependency
@@ -1242,7 +1242,7 @@ Add `iforest_score` and `iforest_flag` columns so D1 (dashboard chart) can plot 
 
 ### Artifact layout
 ```
-outputs/power_dual/
+outputs/power/dual/
   iforest_models.pkl        # dict[category → IsolationForest]
   iforest_metadata.json     # {"ups": {"threshold": -0.12, ...}, ...}
 ```
@@ -1272,7 +1272,7 @@ Target: IF flag rate < 0.02 on normal traffic; ≥ 0.70 on injected anomaly rows
 **Status:** Done — 2026-05-05  
 **Priority:** High — 117 of 118 `iforest_only` events are false positives; root cause is battery features (always 0.0 for PDU/network/env) and `output_frequency_hz` (grid noise) being fed to IF for all categories  
 **Depends on:** E1 (done)  
-**Files:** [training/train_iforest_power.py](../snmp_anomaly_detection/training/train_iforest_power.py), [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+**Files:** [training/train_iforest_power.py](../snmp_anomaly_detection/power/training/train_iforest_power.py), [inference/dual_model_scorer.py](../snmp_anomaly_detection/power/inference/dual_model_scorer.py)
 
 ### Issue
 
@@ -1332,7 +1332,7 @@ After retraining IF and re-running detection:
 **Status:** Done — 2026-05-06  
 **Priority:** High — current implementation scores only the last timestep; faults that peak mid-window are missed entirely, keeping IF recall at 3–16%  
 **Depends on:** E2 (feature masks should be in place first so min-score is computed on clean features)  
-**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/power/inference/dual_model_scorer.py)
 
 ### Issue
 
@@ -1368,7 +1368,7 @@ IF recall on UPS anomaly windows: 3.1% → target > 30%
 **Status:** Done — 2026-05-06  
 **Priority:** Medium — 117 FP events have score_ratio 1.00–1.10; a minimum ratio guard removes these without retraining  
 **Depends on:** E2 and E3 (implement feature masks and all-timestep scoring first; recalibrate threshold after)  
-**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/power/inference/dual_model_scorer.py)
 
 ### Issue
 
@@ -1399,7 +1399,7 @@ This is a tuning fix on top of E2+E3. Re-evaluate the right ratio value after E2
 **Status:** Done — 2026-05-06  
 **Priority:** Medium — `detect-power-csv` is noticeably slow after adding IForest; root cause is ~42,000 individual `score_samples()` calls instead of 21  
 **Depends on:** E2 (feature masks should be in place first so batch call uses the right columns)  
-**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/inference/dual_model_scorer.py)
+**File:** [inference/dual_model_scorer.py](../snmp_anomaly_detection/power/inference/dual_model_scorer.py)
 
 ### Issue
 
@@ -1438,7 +1438,7 @@ This reduces **~42,000 sklearn calls → 21 calls** (one per device). sklearn ca
 
 **Step 2 (optional) — Reduce n_estimators from 200 → 100 in training:**
 
-In [train_iforest_power.py:47](../snmp_anomaly_detection/training/train_iforest_power.py#L47):
+In [train_iforest_power.py:47](../snmp_anomaly_detection/power/training/train_iforest_power.py#L47):
 ```python
 clf = IsolationForest(n_estimators=100, random_state=42, contamination="auto")
 ```
@@ -1454,7 +1454,7 @@ clf = IsolationForest(n_estimators=100, random_state=42, contamination="auto")
 **Status:** Done — 2026-05-07  
 **Priority:** Medium — in streaming mode IForest only fires when a full 20-row LSTM window is ready; it is unnecessarily blocked by the LSTM buffer requirement when it only needs 1 row  
 **Depends on:** E2 (feature masks), E5 (batch scoring pattern understood)  
-**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py)
+**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/power/inference/power_stream_processor.py)
 
 ### Issue
 
@@ -1519,7 +1519,7 @@ In a real datacenter, a sudden voltage transient (e.g. utility switching event) 
 **Status:** Done — 2026-05-07  
 **Priority:** High — without this, E6's fast IF alerts are stateless; the NOC sees a stream of `iforest_only` flags with no way to know which ones LSTM later agreed with or retracted  
 **Depends on:** E6 (IF must be decoupled from LSTM buffer first)  
-**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py)
+**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/power/inference/power_stream_processor.py)
 
 ### Why this task exists
 
@@ -1622,7 +1622,7 @@ python3 -m snmp_anomaly_detection detect-power-kafka
 **Status:** Pending  
 **Priority:** Medium — do this before wiring a real NOC; not urgent while C1 and real devices are still missing  
 **Depends on:** C1 (ClickHouse), D1 (NOC data wiring) — the two-stream split only becomes necessary when there are two real consumers  
-**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/inference/power_stream_processor.py), [streaming/detect_power_kafka.py](../snmp_anomaly_detection/streaming/detect_power_kafka.py)
+**File:** [inference/power_stream_processor.py](../snmp_anomaly_detection/power/inference/power_stream_processor.py), [streaming/detect_power_kafka.py](../snmp_anomaly_detection/power/streaming/detect_power_kafka.py)
 
 ### Why this task exists
 
