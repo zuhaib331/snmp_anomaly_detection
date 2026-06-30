@@ -3,12 +3,12 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from snmp_anomaly_detection.inference.event_processor import (
+from snmp_anomaly_detection.network.inference.event_processor import (
     EventProcessor,
     PreparedWindow,
     ProcessedWindow,
 )
-from snmp_anomaly_detection.inference.events import NormalizedEvent
+from snmp_anomaly_detection.network.inference.events import NormalizedEvent
 
 
 @dataclass(frozen=True)

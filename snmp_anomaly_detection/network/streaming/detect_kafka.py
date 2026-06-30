@@ -4,13 +4,13 @@ import json
 from collections import Counter
 
 from snmp_anomaly_detection.config import FeatureEngineeringConfig, KafkaConfig, ProjectPaths
-from snmp_anomaly_detection.inference.core import load_inference_artifacts
-from snmp_anomaly_detection.inference.event_processor import EventProcessor, ProcessedWindow
-from snmp_anomaly_detection.inference.live_microbatch import (
+from snmp_anomaly_detection.network.inference.core import load_inference_artifacts
+from snmp_anomaly_detection.network.inference.event_processor import EventProcessor, ProcessedWindow
+from snmp_anomaly_detection.network.inference.live_microbatch import (
     LiveMicroBatchProcessor,
     MicroBatchConfig,
 )
-from snmp_anomaly_detection.streaming.kafka_source import (
+from snmp_anomaly_detection.network.streaming.kafka_source import (
     HARDCODED_INPUT_TOPIC,
     _decode_message_key,
     build_consumer,

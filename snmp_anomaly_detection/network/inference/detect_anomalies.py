@@ -7,7 +7,7 @@ from snmp_anomaly_detection.config import (
     InferenceConfig,
     ProjectPaths,
 )
-from snmp_anomaly_detection.inference.csv_replay import detect_csv_replay
+from snmp_anomaly_detection.network.inference.csv_replay import detect_csv_replay
 
 
 def detect_anomalies(

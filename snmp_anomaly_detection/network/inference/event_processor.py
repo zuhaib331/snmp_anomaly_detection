@@ -6,14 +6,14 @@ import numpy as np
 import pandas as pd
 
 from snmp_anomaly_detection.config import FeatureEngineeringConfig
-from snmp_anomaly_detection.inference.core import (
+from snmp_anomaly_detection.network.inference.core import (
     InferenceArtifacts,
     WindowScore,
     score_window,
     score_windows,
 )
-from snmp_anomaly_detection.inference.events import NormalizedEvent
-from snmp_anomaly_detection.inference.window_manager import DeviceWindowManager, ReadyWindow
+from snmp_anomaly_detection.network.inference.events import NormalizedEvent
+from snmp_anomaly_detection.network.inference.window_manager import DeviceWindowManager, ReadyWindow
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ from typing import Any, Iterator
 import pandas as pd
 
 from snmp_anomaly_detection.config import KafkaConfig
-from snmp_anomaly_detection.inference.events import NormalizedEvent
+from snmp_anomaly_detection.network.inference.events import NormalizedEvent
 
 try:
     from kafka import KafkaConsumer

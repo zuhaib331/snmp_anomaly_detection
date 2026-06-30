@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 
 from snmp_anomaly_detection.config import KafkaConfig
-from snmp_anomaly_detection.streaming.kafka_source import (
+from snmp_anomaly_detection.network.streaming.kafka_source import (
     HARDCODED_INPUT_TOPIC,
     iter_kafka_messages,
     normalize_kafka_payload,

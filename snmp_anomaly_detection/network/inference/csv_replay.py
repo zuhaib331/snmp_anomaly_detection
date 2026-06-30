@@ -9,10 +9,10 @@ from snmp_anomaly_detection.config import (
     InferenceConfig,
     ProjectPaths,
 )
-from snmp_anomaly_detection.inference.core import load_inference_artifacts
-from snmp_anomaly_detection.inference.event_processor import EventProcessor
-from snmp_anomaly_detection.inference.events import NormalizedEvent
-from snmp_anomaly_detection.preprocessing.feature_engineering import load_dataset
+from snmp_anomaly_detection.network.inference.core import load_inference_artifacts
+from snmp_anomaly_detection.network.inference.event_processor import EventProcessor
+from snmp_anomaly_detection.network.inference.events import NormalizedEvent
+from snmp_anomaly_detection.network.preprocessing.feature_engineering import load_dataset
 
 
 def normalize_csv_row(row: pd.Series) -> NormalizedEvent:

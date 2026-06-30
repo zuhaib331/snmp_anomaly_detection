@@ -11,8 +11,8 @@ from typing import Iterator
 import numpy as np
 
 from snmp_anomaly_detection.config import KafkaConfig
-from snmp_anomaly_detection.data.dataset_builder import generate_normal_pattern, inject_anomaly
-from snmp_anomaly_detection.streaming.kafka_source import HARDCODED_INPUT_TOPIC
+from snmp_anomaly_detection.network.data.dataset_builder import generate_normal_pattern, inject_anomaly
+from snmp_anomaly_detection.network.streaming.kafka_source import HARDCODED_INPUT_TOPIC
 
 try:
     from kafka import KafkaProducer
