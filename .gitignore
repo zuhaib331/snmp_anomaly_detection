@@ -16,3 +16,4 @@ featureEngineering/
 # Claude Code
 .claude/
 .codex
+.venv/
