@@ -7,8 +7,8 @@ import numpy as np
 
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, ProjectPaths, PowerTrainingConfig
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
-from snmp_anomaly_detection.evaluation.time_split import time_based_split
-from snmp_anomaly_detection.preprocessing.power_features import (
+from snmp_anomaly_detection.power.evaluation.time_split import time_based_split
+from snmp_anomaly_detection.power.preprocessing.power_features import (
     run_power_feature_engineering,
     load_power_dataset,
     normalize_absolute_features,

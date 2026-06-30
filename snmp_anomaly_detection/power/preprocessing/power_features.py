@@ -14,7 +14,7 @@ import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, ProjectPaths
-from snmp_anomaly_detection.preprocessing.scalar_transforms import (
+from snmp_anomaly_detection.power.preprocessing.scalar_transforms import (
     LOG1P_COLS,
     DELTA_PAIRS,
 )

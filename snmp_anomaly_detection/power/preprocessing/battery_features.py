@@ -14,7 +14,7 @@ import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
 from snmp_anomaly_detection.config import BATTERY_RUL_FEATURES, BATTERY_RUL_CATEGORIES, ProjectPaths
-from snmp_anomaly_detection.preprocessing.power_features import (
+from snmp_anomaly_detection.power.preprocessing.power_features import (
     apply_log1p_skewed,
     load_power_dataset,
     create_sequences,

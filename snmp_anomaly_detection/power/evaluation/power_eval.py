@@ -9,8 +9,8 @@ import pandas as pd
 
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, ProjectPaths
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
-from snmp_anomaly_detection.evaluation.time_split import time_based_split
-from snmp_anomaly_detection.preprocessing.power_features import (
+from snmp_anomaly_detection.power.evaluation.time_split import time_based_split
+from snmp_anomaly_detection.power.preprocessing.power_features import (
     apply_log1p_skewed,
     create_sequences,
     load_power_dataset,

@@ -198,7 +198,6 @@ class KafkaConfig:
     micro_batch_size: int = 8
     micro_batch_max_wait_ms: int = 50
     save_local_results: bool = True
-    power_alerts_topic: str = "snmp-power-anomaly-windows"
 
 
 # ---------------------------------------------------------------------------

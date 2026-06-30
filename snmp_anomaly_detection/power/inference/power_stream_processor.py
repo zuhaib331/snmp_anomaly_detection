@@ -21,9 +21,9 @@ from snmp_anomaly_detection.config import (
     ProjectPaths,
 )
 from snmp_anomaly_detection.models.lstm_autoencoder import torch
-from snmp_anomaly_detection.inference.events import PowerEvent
-from snmp_anomaly_detection.inference.event_preprocessor import EventPreprocessor
-from snmp_anomaly_detection.inference.model_scorer import (
+from snmp_anomaly_detection.power.inference.events import PowerEvent
+from snmp_anomaly_detection.power.inference.event_preprocessor import EventPreprocessor
+from snmp_anomaly_detection.power.inference.model_scorer import (
     DualModelResult,
     DualModelScorer,
     RollingWindowBuffer,

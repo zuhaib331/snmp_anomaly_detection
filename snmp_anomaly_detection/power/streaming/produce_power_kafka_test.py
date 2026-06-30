@@ -30,13 +30,13 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from snmp_anomaly_detection.config import KafkaConfig, PowerTrainingConfig, ProjectPaths
-from snmp_anomaly_detection.data.dataset_builder import (
+from snmp_anomaly_detection.power.data.dataset_builder import (
     PowerDatasetConfig,
     PowerDeviceProfile,
     _DEFAULT_POWER_PROFILES,
     build_power_dataset,
 )
-from snmp_anomaly_detection.streaming.detect_power_kafka import POWER_KAFKA_TOPIC
+from snmp_anomaly_detection.power.streaming.detect_power_kafka import POWER_KAFKA_TOPIC
 
 try:
     from kafka import KafkaProducer

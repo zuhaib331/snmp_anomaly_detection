@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from snmp_anomaly_detection.preprocessing.scalar_transforms import (
+from snmp_anomaly_detection.power.preprocessing.scalar_transforms import (
     ALL_DELTA_SOURCES,
     apply_log1p,
     compute_deltas,
@@ -21,7 +21,7 @@ from snmp_anomaly_detection.preprocessing.scalar_transforms import (
 )
 
 if TYPE_CHECKING:
-    from snmp_anomaly_detection.inference.events import PowerEvent
+    from snmp_anomaly_detection.power.inference.events import PowerEvent
 
 
 class EventPreprocessor:

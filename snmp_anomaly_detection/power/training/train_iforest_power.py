@@ -13,7 +13,7 @@ import numpy as np
 from sklearn.ensemble import IsolationForest
 
 from snmp_anomaly_detection.config import BASELINE_UPS_FEATURES, IF_EXCLUDED_FEATURES, ProjectPaths
-from snmp_anomaly_detection.preprocessing.power_features import (
+from snmp_anomaly_detection.power.preprocessing.power_features import (
     load_power_dataset,
     normalize_absolute_features,
     apply_log1p_skewed,

@@ -6,7 +6,7 @@ All logic lives in model_scorer.py; this file is the CLI entry point.
 from __future__ import annotations
 
 from snmp_anomaly_detection.config import ProjectPaths
-from snmp_anomaly_detection.inference.model_scorer import (
+from snmp_anomaly_detection.power.inference.model_scorer import (
     DualModelResult,
     run_csv_detection,
     save_dual_results,

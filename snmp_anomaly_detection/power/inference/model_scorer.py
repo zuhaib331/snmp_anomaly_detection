@@ -277,9 +277,9 @@ def run_csv_detection(
     inference_config: PowerInferenceConfig | None = None,
     paths: ProjectPaths | None = None,
 ) -> list[DualModelResult]:
-    from snmp_anomaly_detection.inference.event_preprocessor import EventPreprocessor
-    from snmp_anomaly_detection.inference.events import PowerEvent
-    from snmp_anomaly_detection.preprocessing.power_features import load_power_dataset
+    from snmp_anomaly_detection.power.inference.event_preprocessor import EventPreprocessor
+    from snmp_anomaly_detection.power.inference.events import PowerEvent
+    from snmp_anomaly_detection.power.preprocessing.power_features import load_power_dataset
 
     inference_config = inference_config or PowerInferenceConfig()
     paths = paths or ProjectPaths()

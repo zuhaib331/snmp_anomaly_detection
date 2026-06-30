@@ -8,12 +8,12 @@ import joblib
 import numpy as np
 
 from snmp_anomaly_detection.config import BATTERY_RUL_FEATURES, BATTERY_RUL_CATEGORIES, ProjectPaths, PowerTrainingConfig
-from snmp_anomaly_detection.models.battery_rul import BatteryRULModel, RULPrediction, torch
-from snmp_anomaly_detection.preprocessing.power_features import (
+from snmp_anomaly_detection.power.models.battery_rul import BatteryRULModel, RULPrediction, torch
+from snmp_anomaly_detection.power.preprocessing.power_features import (
     apply_log1p_skewed,
     load_power_dataset,
 )
-from snmp_anomaly_detection.preprocessing.battery_features import derive_rul_labels
+from snmp_anomaly_detection.power.preprocessing.battery_features import derive_rul_labels
 
 
 _MC_SAMPLES: int = PowerTrainingConfig().mc_samples

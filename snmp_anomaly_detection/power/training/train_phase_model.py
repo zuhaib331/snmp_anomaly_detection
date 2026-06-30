@@ -7,8 +7,8 @@ import numpy as np
 
 from snmp_anomaly_detection.config import PHASE_LEVEL_FEATURES, ProjectPaths, PowerTrainingConfig
 from snmp_anomaly_detection.models.lstm_autoencoder import LSTMAutoencoder, torch
-from snmp_anomaly_detection.evaluation.time_split import time_based_split
-from snmp_anomaly_detection.preprocessing.power_features import (
+from snmp_anomaly_detection.power.evaluation.time_split import time_based_split
+from snmp_anomaly_detection.power.preprocessing.power_features import (
     load_power_dataset,
     aggregate_phase_metrics,
     normalize_absolute_features,
@@ -16,7 +16,7 @@ from snmp_anomaly_detection.preprocessing.power_features import (
     add_delta_features,
     filter_normal_rows,
 )
-from snmp_anomaly_detection.preprocessing.phase_features import (
+from snmp_anomaly_detection.power.preprocessing.phase_features import (
     enrich_imbalance_features,
     scale_phase_features,
     build_phase_sequences,

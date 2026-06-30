@@ -9,9 +9,9 @@ import json
 from dataclasses import asdict
 
 from snmp_anomaly_detection.config import KafkaConfig, PowerInferenceConfig, ProjectPaths
-from snmp_anomaly_detection.inference.events import PowerEvent
-from snmp_anomaly_detection.inference.model_scorer import build_window_detail, save_dual_results
-from snmp_anomaly_detection.inference.power_stream_processor import (
+from snmp_anomaly_detection.power.inference.events import PowerEvent
+from snmp_anomaly_detection.power.inference.model_scorer import build_window_detail, save_dual_results
+from snmp_anomaly_detection.power.inference.power_stream_processor import (
     AlertState,
     PowerStreamProcessor,
     format_power_alert,
@@ -25,6 +25,7 @@ except ImportError:
     KafkaProducer = None  # type: ignore
 
 POWER_KAFKA_TOPIC = "snmp-power-events"
+POWER_ALERTS_TOPIC = "snmp-power-anomaly-windows"
 
 
 def _require_kafka() -> None:
@@ -45,7 +46,7 @@ def run_power_kafka_detection(
     paths = paths or ProjectPaths()
     paths.ensure_power_directories()
 
-    alerts_topic = kafka_config.power_alerts_topic
+    alerts_topic = POWER_ALERTS_TOPIC
     processor = PowerStreamProcessor(inference_config=inference_config, paths=paths)
     consumer = KafkaConsumer(
         POWER_KAFKA_TOPIC,

@@ -16,13 +16,13 @@ import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
 from snmp_anomaly_detection.config import PHASE_LEVEL_FEATURES, ProjectPaths
-from snmp_anomaly_detection.preprocessing.power_features import (
+from snmp_anomaly_detection.power.preprocessing.power_features import (
     apply_log1p_skewed,
     load_power_dataset,
     filter_normal_rows,
     create_sequences,
 )
-from snmp_anomaly_detection.preprocessing.scalar_transforms import (
+from snmp_anomaly_detection.power.preprocessing.scalar_transforms import (
     PHASE_V_COLS,
     PHASE_I_COLS,
     IMBALANCE_CLIP_MAX,
