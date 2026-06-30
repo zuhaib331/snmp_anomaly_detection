@@ -112,3 +112,7 @@ def main() -> None:
     print(dataframe.head())
 
 
+if __name__ == "__main__":
+    main()
+
+
