@@ -3,37 +3,49 @@ from __future__ import annotations
 import argparse
 import sys
 
-from snmp_anomaly_detection.data.dataset_builder import main as build_dataset_main
-from snmp_anomaly_detection.inference.csv_replay import main as detect_csv_main
-from snmp_anomaly_detection.inference.detect_anomalies import main as detect_main
-from snmp_anomaly_detection.preprocessing.feature_engineering import (
+from snmp_anomaly_detection.network.data.dataset_builder import main as build_dataset_main
+from snmp_anomaly_detection.network.inference.csv_replay import main as detect_csv_main
+from snmp_anomaly_detection.network.inference.detect_anomalies import main as detect_main
+from snmp_anomaly_detection.network.preprocessing.feature_engineering import (
     main as feature_engineering_main,
 )
-from snmp_anomaly_detection.streaming.detect_kafka import main as detect_kafka_main
-from snmp_anomaly_detection.streaming.detect_kafka_dry import main as detect_kafka_dry_main
-from snmp_anomaly_detection.streaming.produce_kafka_test_data import (
+from snmp_anomaly_detection.network.streaming.detect_kafka import main as detect_kafka_main
+from snmp_anomaly_detection.network.streaming.detect_kafka_dry import (
+    main as detect_kafka_dry_main,
+)
+from snmp_anomaly_detection.network.streaming.produce_kafka_test_data import (
     main as produce_kafka_test_data_main,
 )
-from snmp_anomaly_detection.training.train_model import main as train_main
+from snmp_anomaly_detection.network.training.train_model import main as train_main
 
 # Power pipeline steps (imported lazily to avoid hard dependency on torch at startup)
 
 
 def _import_power_steps() -> dict:
-    from snmp_anomaly_detection.data.dataset_builder import (
+    from snmp_anomaly_detection.power.data.dataset_builder import (
         PowerDatasetConfig,
         build_power_dataset,
         save_power_dataset,
     )
-    from snmp_anomaly_detection.preprocessing.power_features import main as preprocess_power_main
-    from snmp_anomaly_detection.training.train_baseline_power import main as train_baseline_main
-    from snmp_anomaly_detection.training.train_battery_rul import main as train_rul_main
-    from snmp_anomaly_detection.training.train_iforest_power import main as train_iforest_main
-    from snmp_anomaly_detection.evaluation.power_eval import main as evaluate_baseline_main
-    from snmp_anomaly_detection.evaluation.rul_eval import main as evaluate_rul_main
-    from snmp_anomaly_detection.inference.dual_model_scorer import main as detect_power_csv_main
-    from snmp_anomaly_detection.streaming.detect_power_kafka import main as detect_power_kafka_main
-    from snmp_anomaly_detection.streaming.produce_power_kafka_test import (
+    from snmp_anomaly_detection.power.preprocessing.power_features import (
+        main as preprocess_power_main,
+    )
+    from snmp_anomaly_detection.power.training.train_baseline_power import (
+        main as train_baseline_main,
+    )
+    from snmp_anomaly_detection.power.training.train_battery_rul import main as train_rul_main
+    from snmp_anomaly_detection.power.training.train_iforest_power import (
+        main as train_iforest_main,
+    )
+    from snmp_anomaly_detection.power.evaluation.power_eval import main as evaluate_baseline_main
+    from snmp_anomaly_detection.power.evaluation.rul_eval import main as evaluate_rul_main
+    from snmp_anomaly_detection.power.inference.dual_model_scorer import (
+        main as detect_power_csv_main,
+    )
+    from snmp_anomaly_detection.power.streaming.detect_power_kafka import (
+        main as detect_power_kafka_main,
+    )
+    from snmp_anomaly_detection.power.streaming.produce_power_kafka_test import (
         main as produce_power_kafka_test_main,
     )
 
