@@ -1,7 +1,7 @@
 # Design: Domain-Subpackage Restructure (lighter 80/20 split)
 
 **Date:** 2026-07-01
-**Branch:** `refactor/domain-subpackages` (off `basemodel`)
+**Branch:** `snmp-network-power-domain-split` (off `basemodel`)
 **Status:** Design — pending user review
 
 ---
@@ -277,7 +277,7 @@ benefit. Rejected in favor of the lighter split.
 
 ## 9. Workflow & verification
 
-1. Branch `refactor/domain-subpackages` off `basemodel`; `git pull` first.
+1. Branch `snmp-network-power-domain-split` off `basemodel`; `git pull` first.
 2. Create `network/` and `power/` package trees with `__init__.py` files.
 3. `git mv` all moved files (preserves history); split `dataset_builder.py` and `events.py`;
    relocate the `inference/__init__.py` re-export block; remove `utils/`.
