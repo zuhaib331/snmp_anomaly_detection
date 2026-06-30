@@ -245,14 +245,30 @@ Explicitly **not** changed: the stale 15-feature / phase-model narrative in `CLA
 
 ---
 
-## 8. Accepted trade-off: `KafkaConfig` stays shared-but-mixed
+## 8. Kafka config: transport stays shared, topic names live with their domain
 
-`KafkaConfig` is imported by both `detect_kafka` (network) and `detect_power_kafka` (power) and holds
-both network topics and the power `power_alerts_topic`. Because `config.py` stays whole under the
-lighter split, this mixed config remains in shared config. Splitting it is "full split" territory and
-is intentionally **out of scope**.
+`KafkaConfig` mixes two different concerns: shared **transport/connection** settings and one
+**power-specific topic name**.
 
-### Rejected alternative — full split
+- **Transport settings stay shared** in `KafkaConfig`: `bootstrap_servers`, `consumer_group_id`,
+  `poll_timeout_ms`, `micro_batch_size`, `micro_batch_max_wait_ms`, `save_local_results`. Both
+  pipelines hit the same broker with the same batching tuning — duplicating these would be wrong.
+- **Topic names belong with their domain.** Two of three already do: `HARDCODED_INPUT_TOPIC`
+  (`snmp-live-events`) lives in network `kafka_source.py`; `POWER_KAFKA_TOPIC` (`snmp-power-events`)
+  lives in power `detect_power_kafka.py`. The outlier is `power_alerts_topic`
+  (`snmp-power-anomaly-windows`), which sits in the shared `KafkaConfig` but is read by exactly one
+  file — `detect_power_kafka.py`, which already defines `POWER_KAFKA_TOPIC` locally.
+
+**Action:** move `power_alerts_topic` out of `KafkaConfig` into
+`power/streaming/detect_power_kafka.py` as a module-level constant beside `POWER_KAFKA_TOPIC`, and
+update its single reader (`detect_power_kafka.py:48`, `kafka_config.power_alerts_topic` → the new
+local constant). After this, `KafkaConfig` is pure shared transport config with zero domain-specific
+fields. One field, one file.
+
+Note (out of scope): both pipelines currently share the default `consumer_group_id`. That is a
+behavior/semantics question, not structure, and is intentionally left unchanged by this refactor.
+
+### `config.py` otherwise stays whole — rejected alternative (full split)
 Move `config.py` into `shared/` and split it three ways, move `main.py` into `shared/`, prepend
 `shared.` everywhere. Cleanest end state but pays the full 27-importer config churn for marginal
 benefit. Rejected in favor of the lighter split.
