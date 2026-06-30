@@ -85,61 +85,77 @@ class ProjectPaths:
     repo_root: Path = field(default_factory=lambda: PACKAGE_ROOT.parent)
     data_dir: Path = field(default_factory=lambda: PACKAGE_ROOT / "data")
     outputs_dir: Path = field(default_factory=lambda: PACKAGE_ROOT / "outputs")
-    utils_dir: Path = field(default_factory=lambda: PACKAGE_ROOT / "utils")
     dataset_file: Path = field(
         default_factory=lambda: PACKAGE_ROOT / "data" / "synthetic_snmp_dataset.csv"
     )
-    scaler_file: Path = field(default_factory=lambda: PACKAGE_ROOT / "utils" / "scaler.pkl")
-    x_train_file: Path = field(default_factory=lambda: PACKAGE_ROOT / "outputs" / "X_train.npy")
-    x_test_file: Path = field(default_factory=lambda: PACKAGE_ROOT / "outputs" / "X_test.npy")
-    y_train_file: Path = field(default_factory=lambda: PACKAGE_ROOT / "outputs" / "y_train.npy")
-    y_test_file: Path = field(default_factory=lambda: PACKAGE_ROOT / "outputs" / "y_test.npy")
+    scaler_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "scaler.pkl"
+    )
+    x_train_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "X_train.npy"
+    )
+    x_test_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "X_test.npy"
+    )
+    y_train_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "y_train.npy"
+    )
+    y_test_file: Path = field(
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "y_test.npy"
+    )
     model_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "lstm_autoencoder.pth"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "lstm_autoencoder.pth"
     )
     model_metadata_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "model_metadata.json"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "model_metadata.json"
     )
     anomaly_results_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "anomaly_results.csv"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "anomaly_results.csv"
     )
     anomaly_windows_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "anomaly_windows.json"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "anomaly_windows.json"
     )
     kafka_live_results_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "kafka_live_results.jsonl"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "network" / "kafka_live_results.jsonl"
     )
     kafka_live_anomaly_windows_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "kafka_live_anomaly_windows.jsonl"
+        default_factory=lambda: PACKAGE_ROOT
+        / "outputs"
+        / "network"
+        / "kafka_live_anomaly_windows.jsonl"
     )
 
     power_dataset_file: Path = field(
         default_factory=lambda: PACKAGE_ROOT / "data" / "synthetic_power_snmp_dataset.csv"
     )
     power_outputs_dir: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_baseline"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power" / "baseline"
     )
     power_phase_outputs_dir: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_phase"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power" / "phase"
     )
     battery_rul_outputs_dir: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "battery_rul"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power" / "battery_rul"
     )
     power_dual_outputs_dir: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power" / "dual"
     )
     device_stats_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual" / "device_stats.json"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power" / "dual" / "device_stats.json"
     )
     iforest_model_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual" / "iforest_models.pkl"
+        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power" / "dual" / "iforest_models.pkl"
     )
     iforest_metadata_file: Path = field(
-        default_factory=lambda: PACKAGE_ROOT / "outputs" / "power_dual" / "iforest_metadata.json"
+        default_factory=lambda: PACKAGE_ROOT
+        / "outputs"
+        / "power"
+        / "dual"
+        / "iforest_metadata.json"
     )
 
     def ensure_directories(self) -> None:
-        for directory in (self.data_dir, self.outputs_dir, self.utils_dir):
+        for directory in (self.data_dir, self.outputs_dir, self.outputs_dir / "network"):
             directory.mkdir(parents=True, exist_ok=True)
 
     def ensure_power_directories(self) -> None:
