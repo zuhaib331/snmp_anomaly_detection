@@ -14,7 +14,7 @@ Add per-device rolling window state so detection can work from sequential events
 
 ## Implementation Changes
 
-- Add `snmp_anomaly_detection.inference.window_manager`.
+- Add `snmp_anomaly_detection.network.inference.window_manager`.
 - Introduce a reusable `DeviceWindowManager` that accepts one event at a time.
 - Introduce a `ReadyWindow` structure carrying metadata and feature values for scoring.
 - Update the CSV detection path to iterate rows sequentially and emit windows from the manager.

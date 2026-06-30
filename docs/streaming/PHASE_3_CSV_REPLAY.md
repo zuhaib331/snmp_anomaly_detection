@@ -13,9 +13,9 @@ Formalize CSV replay as an explicit input source that uses the same downstream e
 
 ## Implementation Changes
 
-- Add `snmp_anomaly_detection.inference.events`.
-- Add `snmp_anomaly_detection.inference.event_processor`.
-- Add `snmp_anomaly_detection.inference.csv_replay`.
+- Add `snmp_anomaly_detection.network.inference.events`.
+- Add `snmp_anomaly_detection.network.inference.event_processor`.
+- Add `snmp_anomaly_detection.network.inference.csv_replay`.
 - Make `detect` a compatibility wrapper around CSV replay mode.
 - Add `detect-csv` as an explicit CLI mode for replay/testing.
 

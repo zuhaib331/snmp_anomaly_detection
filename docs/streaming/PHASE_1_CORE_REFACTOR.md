@@ -14,7 +14,7 @@ Separate model/scaler loading and per-window anomaly scoring from the CSV-only b
 
 ## Implementation Changes
 
-- Add `snmp_anomaly_detection.inference.core` as the shared inference module.
+- Add `snmp_anomaly_detection.network.inference.core` as the shared inference module.
 - Move artifact loading logic into the shared module.
 - Move reconstruction scoring and anomaly explanation logic into the shared module.
 - Update the existing batch detector to call the shared module instead of duplicating scoring logic.
